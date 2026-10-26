@@ -71,16 +71,24 @@ final class LiveAppIconProvider: AppIconProviding {
     }
 
     /// The first existing macOS path of `windowsPath`: inside the process's own prefix,
-    /// then inside every CrossOver bottle (alphabetical), then `~/.wine`.
+    /// then inside every CrossOver bottle (alphabetical) of CrossOver's configured
+    /// `BottleDir` (bottles may live on another volume) and of the default location,
+    /// then `~/.wine`.
     private static func existingMacPath(windowsPath: String, wineprefix: String?) -> String? {
         let fileManager = FileManager.default
         var prefixes: [String] = []
         if let wineprefix, !wineprefix.isEmpty { prefixes.append(wineprefix) }
         let home = fileManager.homeDirectoryForCurrentUser
-        let bottles = home.appendingPathComponent("Library/Application Support/CrossOver/Bottles", isDirectory: true)
-        if let names = try? fileManager.contentsOfDirectory(atPath: bottles.path) {
+        var bottleDirectories: [String] = []
+        if let configured = CFPreferencesCopyAppValue("BottleDir" as CFString, "com.codeweavers.CrossOver" as CFString) as? String,
+           !configured.isEmpty {
+            bottleDirectories.append((configured as NSString).expandingTildeInPath)
+        }
+        bottleDirectories.append(home.appendingPathComponent("Library/Application Support/CrossOver/Bottles", isDirectory: true).path)
+        for directory in bottleDirectories {
+            guard let names = try? fileManager.contentsOfDirectory(atPath: directory) else { continue }
             for name in names.sorted() where !name.hasPrefix(".") {
-                prefixes.append(bottles.appendingPathComponent(name, isDirectory: true).path)
+                prefixes.append((directory as NSString).appendingPathComponent(name))
             }
         }
         prefixes.append(home.appendingPathComponent(".wine", isDirectory: true).path)

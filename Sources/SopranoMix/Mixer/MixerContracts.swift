@@ -156,7 +156,9 @@ struct MixerEnvironment {
     var theme: @MainActor () -> AppTheme
     /// Persists one value at a settings path (`SettingsEditor` semantics), e.g.
     /// `(60, ["apps", "com.spotify.client", "volume"])`.
-    var writeSetting: @MainActor (Any, [String]) -> Void
+    /// False when settings.json could not be written (it does not parse); the mixer keeps
+    /// the change pending and writes it again after the next settings change.
+    var writeSetting: @MainActor (Any, [String]) -> Bool
     /// Runs `work` once after `delay` seconds (0: at once).
     var schedule: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Void
     /// Runs `work` every `interval` seconds until the returned closure is called.

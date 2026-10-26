@@ -105,10 +105,10 @@ final class DeviceMenuButton: PanelFlippedView {
         let menu = NSMenu(title: menuLabel)
         menu.autoenablesItems = false
         menu.appearance = theme.appearance.nsAppearance
-        for (index, item) in items.enumerated() {
+        for item in items {
             let menuItem = NSMenuItem(title: item.title, action: #selector(chooseItem(_:)), keyEquivalent: "")
             menuItem.target = self
-            menuItem.tag = index
+            menuItem.representedObject = DeviceMenuChoice(uid: item.uid)
             menuItem.image = Self.symbol(item.symbolName, pointSize: Self.symbolPointSize)
             menuItem.state = item.isSelected ? .on : .off
             menu.addItem(menuItem)
@@ -119,14 +119,23 @@ final class DeviceMenuButton: PanelFlippedView {
         return menu
     }
 
-    /// Chooses the item at `index` as a menu click would.
+    /// Chooses the item at `index` of the current items as a menu click would.
     func select(itemAt index: Int) {
-        guard items.indices.contains(index), !items[index].isSelected else { return }
-        onSelect?(items[index].uid)
+        guard items.indices.contains(index) else { return }
+        select(uid: items[index].uid)
+    }
+
+    /// Chooses the device `uid` (nil: the system output) if it is still among the
+    /// current items and not already selected. Items can change while a menu is open,
+    /// so a click is resolved by identity, never by position.
+    func select(uid: String?) {
+        guard let item = items.first(where: { $0.uid == uid }), !item.isSelected else { return }
+        onSelect?(item.uid)
     }
 
     @objc private func chooseItem(_ sender: NSMenuItem) {
-        select(itemAt: sender.tag)
+        guard let choice = sender.representedObject as? DeviceMenuChoice else { return }
+        select(uid: choice.uid)
     }
 
     @objc func openMenu(_ sender: Any?) {
@@ -260,5 +269,15 @@ final class DeviceMenuButton: PanelFlippedView {
             .withSymbolConfiguration(configuration)
         image?.isTemplate = true
         return image
+    }
+}
+
+/// A device menu item's identity (`representedObject`): the device UID, nil for the
+/// system output, so a click resolves against the items current when it lands.
+final class DeviceMenuChoice: NSObject {
+    let uid: String?
+
+    init(uid: String?) {
+        self.uid = uid
     }
 }

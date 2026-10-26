@@ -1,8 +1,5 @@
 import AppKit
-import OSLog
 import SopranoMixCore
-
-private let menuLog = Logger(subsystem: "com.soprano.mix", category: "menu-bar")
 
 /// The status item and the app menu. A left click toggles the mixer panel below the item;
 /// a right click or control-click shows the menu, which is rebuilt each time it opens, so
@@ -127,13 +124,9 @@ final class MenuBarController: NSObject {
         openPermissions()
     }
 
+    /// SettingsCenter logs a failed write (e.g. settings.json does not parse).
     @objc private func toggleLaunchAtLogin() {
-        let enabled = !settings.settings.app.startAtLogin
-        do {
-            try settings.write(enabled, at: ["app", "startAtLogin"])
-        } catch {
-            menuLog.error("Could not write app.startAtLogin: \(error.localizedDescription, privacy: .public)")
-        }
+        settings.write(!settings.settings.app.startAtLogin, at: ["app", "startAtLogin"])
     }
 
     @objc private func showAbout() {

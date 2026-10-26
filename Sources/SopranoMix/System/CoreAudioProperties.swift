@@ -88,6 +88,14 @@ enum CoreAudioProperties {
         return value.takeRetainedValue() as String
     }
 
+    /// Variable-length property data (e.g. `AudioHardwareIOProcStreamUsage`).
+    static func setBytes(_ bytes: UnsafeRawBufferPointer, on object: AudioObjectID, _ address: AudioObjectPropertyAddress) throws {
+        var address = address
+        guard let base = bytes.baseAddress else { return }
+        let status = AudioObjectSetPropertyData(object, &address, 0, nil, UInt32(bytes.count), base)
+        guard status == noErr else { throw CoreAudioError(status: status, operation: "Set '\(CoreAudioError.fourCC(OSStatus(bitPattern: address.mSelector)))'") }
+    }
+
     static func setValue<T>(_ value: T, on object: AudioObjectID, _ address: AudioObjectPropertyAddress) throws {
         var address = address
         let status = withUnsafePointer(to: value) { pointer in

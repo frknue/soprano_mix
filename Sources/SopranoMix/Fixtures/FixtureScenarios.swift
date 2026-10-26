@@ -356,16 +356,28 @@ struct SettingsWrite: Equatable, Encodable {
 final class FixtureSettingsStore {
     /// What `environment.settings()` returns; assign to simulate an edit of the file.
     var settings: SopranoMixSettings
+    /// Every successful write, in order.
     private(set) var writes: [SettingsWrite] = []
+    /// Simulates a settings.json that cannot be written (e.g. it does not parse).
+    var failsWrites = false
+    /// Writes refused while `failsWrites`.
+    private(set) var failedWriteCount = 0
 
     init(settings: SopranoMixSettings) {
         self.settings = settings
     }
 
-    func write(_ value: Any, at path: [String]) {
+    /// False (and nothing changes) while `failsWrites`.
+    @discardableResult
+    func write(_ value: Any, at path: [String]) -> Bool {
+        guard !failsWrites else {
+            failedWriteCount += 1
+            return false
+        }
         let value = SettingValue(value)
         writes.append(SettingsWrite(path: path, value: value))
         settings = Self.applying(value, at: path, to: settings)
+        return true
     }
 
     /// `settings` with one written value applied like `SettingsResolver` would read it

@@ -258,7 +258,10 @@ public enum AudioAppResolver {
 `systemNames`: `systemsoundserverd` → "System Sounds", `com.apple.assistantd`,
 `com.apple.CoreSpeech`, `com.apple.corespeechd_system` → "Siri",
 `com.apple.speech.speechsynthesisd` → "Spoken Content", `com.apple.avconferenced` →
-"FaceTime", `com.apple.accessibility.heard` → "Hearing".
+"FaceTime", `com.apple.accessibility.heard` → "Hearing",
+`com.codeweavers.CrossOver.wineloader` → "CrossOver (Windows)" (only reached when a Wine
+process's argv cannot be read; its executable path is then a temporary copy). Names
+served by several processes share one key: Siri's three are `com.apple.assistantd`.
 
 `apps`: group by key. The group's name, kind and icon come from its primary process: the
 one whose identity came from rule 5 (the app itself), else the lowest pid.
@@ -288,7 +291,9 @@ public enum RoutePlanner {
         settings: SopranoMixSettings,     // includes the controller's unsaved overrides
         devices: DeviceSnapshot,
         meteredKeys: Set<AppKey>,         // apps showing a meter now (panel visible, meters on)
-        canCapture: Bool
+        canCapture: Bool,
+        heldKeys: Set<AppKey> = [],       // apps whose volume change is still in progress
+        heldOutputUIDs: Set<String> = []  // outputs whose software volume change is in progress
     ) -> RoutePlan
     /// The software gain of an output: 1 with hardware volume (`outputVolume != nil`),
     /// else `outputs[uid] ?? outputs[name]` through `VolumeLaw.gain`, 0 when muted.
@@ -310,6 +315,10 @@ Rules:
 - **Master**: when the default output has no hardware volume and its software gain ≠ 1
   → `MasterRouteSpec` on it, gain = its software gain, excluding every process object
   of every replace route.
+- **Held**: an app in `heldKeys` keeps its replace route even at default settings (gain
+  from its settings, 1 at 100 %), and an output in `heldOutputUIDs` keeps the master route
+  at unity, so a drag through 100 % never tears a tap down mid-gesture; the route goes
+  once the change is final.
 - Every spec carries `settings.audio.bufferFrames`. Routes are sorted by key.
 
 ### Volume, DSP, meters (`VolumeLaw.swift`, `GainStage.swift`, `MeterBallistics.swift`)
@@ -481,6 +490,8 @@ source changes (Soprano Cast's `CarbonHotkeys`, reduced to one combo).
     func handle(_ request: CLIRequest) -> CLIResponse
     func settingsDidChange()
     func permissionDidChange()
+    /// Writes every pending change now (quit).
+    func flushPendingSettings()
 }
 enum MixerModelBuilder {
     static func model(listedApps: [AudioApp], settings: SopranoMixSettings, devices: DeviceSnapshot,
@@ -502,8 +513,12 @@ Controller behavior:
   only when the plan changed; when visible, `panel.update(model:theme:)`.
 - **Overrides**: an intent changes an in-memory override at once (re-plan, gain applied
   within one IO cycle), and persists through `environment.writeSetting` when `final`
-  (mouse up, menu choice, key up, CLI) or 0.5 s after the last change. An override is
-  dropped once the file settings equal it.
+  (mouse up, menu choice, key up, CLI) or 0.5 s after the last change. A failed write
+  (settings.json does not parse) stays pending and is retried after the next settings
+  change. After every write, overrides the file now satisfies are dropped (a no-op write
+  fires no settings change). Apps with a pending volume override are `heldKeys`, outputs
+  with a pending software-volume override `heldOutputUIDs`. `flushPendingSettings()`
+  writes everything pending at once (quit).
 - **Intents**: `setAppVolume` → `apps.<key>.volume` (rounded to integer percent);
   `toggleAppMute` → `apps.<key>.muted`; `setAppOutput` → `apps.<key>.output` (UID, or
   "default"); `setDefaultDevice` → `devices.setDefaultDevice`; `setDeviceVolume` →
@@ -565,14 +580,18 @@ struct PermissionStatus: Equatable { var capture: CaptureStatus; var accessibili
   `set`, `mute`, `unmute`, `output`, `show`, `hide`, `help`, `--help` →
   `CLIClient.run(arguments:)`; all exit. Otherwise the GUI: `.accessory` activation
   policy, `AppDelegate`.
-- `AppDelegate` (composition root): quit if another instance with this bundle id runs;
+- `AppDelegate` (composition root): quit if another Soprano Mix runs (installed or dev:
+  any `com.soprano.mix*` bundle id; two instances would route every app twice);
   `SettingsCenter.shared.start()`; `ThemeCenter.shared.start()`; the live system objects;
   `MixPanelWindow`, `VolumeHUD`; `MixerController(...).start()`; `VolumeKeyMonitor`
   while `volumeKeys.anyOutput` and Accessibility is granted (polled every 2 s while
   missing, never prompting on its own); `CarbonPanelHotkey` from `panel.hotkey`;
   `MenuBarController`; `LoginItem.sync`; `CLIServer.start()`. Settings changes re-apply
   the controller, hotkey, volume keys, menu bar and login item.
-  `applicationWillTerminate` → `router.stopAll()`. First launch with capture not
+  `applicationWillTerminate` → `controller.flushPendingSettings()`, then
+  `router.stopAll()`. Only `com.soprano.mix` registers the login item. Capture status and
+  the alert volume are cached (polled every 2 s, updated after a request or a write), so
+  a slider drag never runs TCC or AppleScript per tick. First launch with capture not
   determined opens the permissions window (once, `UserDefaults` key
   `didRequestPermissions`). Reopening the app opens the panel.
 - `SettingsFile`, `SettingsCenter`, `ThemeCenter`, `LoginItem`: Soprano Tab's, renamed

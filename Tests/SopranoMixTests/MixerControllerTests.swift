@@ -104,6 +104,94 @@ struct MixerControllerTests {
         #expect(harness.controller.plan.route(for: spotify)?.gain == VolumeLaw.gain(percent: 40))
     }
 
+    @Test("a write that leaves settings.json unchanged still lets later hand edits apply")
+    func noOpWriteThenHandEdit() {
+        let harness = MixerTestHarness()
+        // Spotify is already at 60 %: the file does not change and no reload follows.
+        harness.controller.handle(.setAppVolume(spotify, 60, final: true))
+        #expect(harness.writes == [volumeWrite(spotify, 60)])
+        harness.settings.apps[spotify] = AppAudioSettings(volume: 40)
+        harness.controller.settingsDidChange()
+        #expect(harness.controller.plan.route(for: spotify)?.gain == VolumeLaw.gain(percent: 40))
+    }
+
+    @Test("dragging through 100 % keeps the app's route until the change is final")
+    func dragThroughDefaultKeepsRoute() {
+        let harness = MixerTestHarness()
+        harness.controller.handle(.setAppVolume(spotify, 100, final: false))
+        let held = harness.controller.plan.route(for: spotify)
+        #expect(held?.mode == .replace)
+        #expect(held?.gain == 1)
+        harness.controller.handle(.setAppVolume(spotify, 104, final: false))
+        harness.controller.handle(.setAppVolume(spotify, 100, final: false))
+        #expect(harness.controller.plan.route(for: spotify)?.mode == .replace)
+
+        harness.controller.handle(.setAppVolume(spotify, 100, final: true))
+        #expect(harness.controller.plan.route(for: spotify) == nil)
+    }
+
+    @Test("dragging an output's software volume through 100 % keeps its master route until final")
+    func dragSoftwareVolumeKeepsMaster() {
+        let harness = MixerTestHarness(scenario: .game)
+        harness.controller.handle(.setDeviceVolume(.output, 100, final: false))
+        #expect(harness.controller.plan.master?.outputDeviceUID == FixtureAudioDevices.odysseyUID)
+        harness.controller.handle(.setDeviceVolume(.output, 100, final: true))
+        #expect(harness.controller.plan.master == nil)
+    }
+
+    @Test("a write settings.json refuses stays in force and is retried after the next settings change")
+    func failedWriteRetried() {
+        let harness = MixerTestHarness()
+        harness.environment.store.failsWrites = true
+        harness.controller.handle(.setAppVolume(spotify, 80, final: true))
+        #expect(harness.writes.isEmpty)
+        #expect(harness.environment.store.failedWriteCount == 1)
+        #expect(harness.controller.plan.route(for: spotify)?.gain == VolumeLaw.gain(percent: 80))
+
+        // Still broken: retried, still in force.
+        harness.controller.settingsDidChange()
+        #expect(harness.environment.store.failedWriteCount == 2)
+        #expect(harness.controller.plan.route(for: spotify)?.gain == VolumeLaw.gain(percent: 80))
+
+        harness.environment.store.failsWrites = false
+        harness.controller.settingsDidChange()
+        #expect(harness.writes == [volumeWrite(spotify, 80)])
+        harness.settings.apps[spotify] = AppAudioSettings(volume: 40)
+        harness.controller.settingsDidChange()
+        #expect(harness.controller.plan.route(for: spotify)?.gain == VolumeLaw.gain(percent: 40))
+    }
+
+    @Test("flushing writes every pending change at once and cancels the debounce")
+    func flushPendingSettings() {
+        let harness = MixerTestHarness()
+        harness.controller.handle(.setAppVolume(spotify, 70, final: false))
+        harness.controller.handle(.setAppVolume(tekken, 20, final: false))
+        #expect(harness.writes.isEmpty)
+        harness.controller.flushPendingSettings()
+        #expect(harness.writes == [volumeWrite(spotify, 70), volumeWrite(tekken, 20)])
+        harness.environment.scheduler.fireAll()
+        #expect(harness.writes.count == 2)
+    }
+
+    @Test("the sound-effects volume is written at most every 100 ms while dragged and always when final")
+    func alertVolumeThrottled() {
+        let harness = MixerTestHarness()
+        harness.controller.showPanel(anchor: nil)
+        harness.controller.handle(.setDeviceVolume(.soundEffects, 30, final: false))
+        #expect(harness.environment.alertVolume == 30)
+        harness.environment.clock = 0.05
+        harness.controller.handle(.setDeviceVolume(.soundEffects, 40, final: false))
+        #expect(harness.environment.alertVolume == 30)
+        #expect(harness.panel.model?.sections.last?.volume == 40)
+        harness.environment.clock = 0.2
+        harness.controller.handle(.setDeviceVolume(.soundEffects, 50, final: false))
+        #expect(harness.environment.alertVolume == 50)
+        harness.environment.clock = 0.22
+        harness.controller.handle(.setDeviceVolume(.soundEffects, 55, final: true))
+        #expect(harness.environment.alertVolume == 55)
+        #expect(harness.panel.model?.sections.last?.volume == 55)
+    }
+
     @Test("app volumes are clamped to 0–400 and rounded to whole percents")
     func appVolumeClampedAndRounded() {
         let harness = MixerTestHarness()

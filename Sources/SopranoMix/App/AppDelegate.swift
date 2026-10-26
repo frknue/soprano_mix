@@ -10,8 +10,12 @@ private let appLog = Logger(subsystem: "com.soprano.mix", category: "app")
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set once the first launch opened the permissions window.
     private static let didRequestPermissionsKey = "didRequestPermissions"
-    /// How often missing permissions are re-checked (never prompting).
-    private static let permissionPollInterval: TimeInterval = 2
+    /// Every flavour's bundle id starts with this (installed `com.soprano.mix`, dev
+    /// `com.soprano.mix.dev`); only one of them may run, or every app is routed twice.
+    private static let bundleIDPrefix = "com.soprano.mix"
+    /// How often the capture status, the alert volume and a missing Accessibility grant
+    /// are re-read (never prompting).
+    private static let pollInterval: TimeInterval = 2
 
     private var router: LiveAudioRouter?
     private var controller: MixerController?
@@ -21,18 +25,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var cliServer: CLIServer?
     private var permissionsWindow: PermissionsWindowController?
-    private var permissionPoll: Timer?
-    private var lastCaptureStatus: CaptureStatus?
+    private var poll: Timer?
     private var appliedStartAtLogin: Bool?
+    /// System Audio Recording as last read; the mixer reads this, never TCC per call.
+    private var captureStatus: CaptureStatus = .unknown
+    /// The alert volume as last read or set; the mixer reads this, never AppleScript per call.
+    private var alertVolume: Double?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.anotherInstanceIsRunning() else {
+            appLog.notice("Another Soprano Mix is running; quitting.")
             NSApp.terminate(nil)
             return
         }
         let settings = SettingsCenter.shared
         settings.start()
         ThemeCenter.shared.start()
+        captureStatus = Permissions.captureStatus
+        alertVolume = AlertVolume.get()
 
         let processes = LiveAudioProcessSource()
         let devices = LiveAudioDevices()
@@ -51,7 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.router = router
         self.controller = controller
-        lastCaptureStatus = Permissions.captureStatus
         controller.start()
 
         volumeKeys = VolumeKeyMonitor()
@@ -78,15 +87,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ThemeCenter.shared.addObserver(self) { [weak self] in
             self?.controller?.settingsDidChange()
         }
+        startPolling()
 
         onboardIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         cliServer?.stop()
-        permissionPoll?.invalidate()
+        poll?.invalidate()
         volumeKeys?.stop()
         hotkey?.register(nil) {}
+        // Debounced slider values reach settings.json before the routes go.
+        controller?.flushPendingSettings()
         router?.stopAll()
         SettingsCenter.shared.stop()
     }
@@ -106,11 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsIssueCount: { SettingsCenter.shared.issues.count },
             theme: { ThemeCenter.shared.theme },
             writeSetting: { value, path in
-                do {
-                    try SettingsCenter.shared.write(value, at: path)
-                } catch {
-                    appLog.error("Could not write \(path.joined(separator: "."), privacy: .public): \(error.localizedDescription, privacy: .public)")
-                }
+                SettingsCenter.shared.write(value, at: path)
             },
             schedule: { delay, work in
                 guard delay > 0 else {
@@ -138,15 +146,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             now: { ProcessInfo.processInfo.systemUptime },
             ownPID: getpid(),
-            captureStatus: { Permissions.captureStatus },
-            requestCapture: { [weak self] completion in
-                Permissions.requestCapture { status in
-                    self?.captureStatusMayHaveChanged(status)
-                    completion(status)
-                }
+            captureStatus: { [weak self] in
+                self?.captureStatus ?? .unknown
             },
-            alertVolume: { AlertVolume.get() },
-            setAlertVolume: { AlertVolume.set($0) },
+            requestCapture: { [weak self] completion in
+                self?.requestCapture(completion)
+            },
+            alertVolume: { [weak self] in
+                self?.alertVolume
+            },
+            setAlertVolume: { [weak self] percent in
+                guard percent.isFinite else { return }
+                AlertVolume.set(percent)
+                // AlertVolume stores whole percents in 0...100.
+                self?.alertVolume = min(max(percent, 0), 100).rounded()
+            },
             openSettingsFile: { SettingsCenter.shared.openInEditor() },
             showAppMenu: { [weak self] anchor in
                 self?.menuBar?.showMenu(at: anchor)
@@ -154,11 +168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// Any other running Soprano Mix, installed or dev.
     private static func anotherInstanceIsRunning() -> Bool {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .contains { $0.processIdentifier != ownPID && !$0.isTerminated }
+        return NSWorkspace.shared.runningApplications.contains { app in
+            guard let bundleID = app.bundleIdentifier else { return false }
+            return bundleID.hasPrefix(bundleIDPrefix)
+                && app.processIdentifier != ownPID
+                && !app.isTerminated
+        }
     }
 
     // MARK: - Settings
@@ -194,10 +212,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Volume keys and permissions
+    // MARK: - Volume keys, capture and alert volume
 
     /// Runs the volume-key tap while `volumeKeys.anyOutput` is on and Accessibility is
-    /// granted; while it is missing, the permission poll retries.
+    /// granted; while it is missing, the poll retries.
     private func applyVolumeKeys() {
         guard let volumeKeys, let controller else { return }
         let wanted = SettingsCenter.shared.settings.volumeKeys.anyOutput
@@ -214,42 +232,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appLog.error("Could not start the volume-key tap: \(String(describing: error), privacy: .public)")
             }
         }
-        updatePermissionPoll()
     }
 
-    /// Polls every 2 s while the volume keys wait for Accessibility or System Audio
-    /// Recording is not granted, so a grant made in System Settings applies without a
-    /// relaunch. Never prompts.
-    private func updatePermissionPoll() {
-        let waitsForAccessibility = SettingsCenter.shared.settings.volumeKeys.anyOutput
-            && volumeKeys?.isRunning == false
-        let waitsForCapture = !(lastCaptureStatus?.allowsRoutes ?? true)
-        if waitsForAccessibility || waitsForCapture {
-            guard permissionPoll == nil else { return }
-            let timer = Timer(timeInterval: Self.permissionPollInterval, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.pollPermissions()
-                }
+    /// Every 2 s: grants made in System Settings and alert-volume changes made elsewhere
+    /// apply without a relaunch. Never prompts.
+    private func startPolling() {
+        guard poll == nil else { return }
+        let timer = Timer(timeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.pollSystemState()
             }
-            RunLoop.main.add(timer, forMode: .common)
-            permissionPoll = timer
-        } else {
-            permissionPoll?.invalidate()
-            permissionPoll = nil
         }
+        RunLoop.main.add(timer, forMode: .common)
+        poll = timer
     }
 
-    private func pollPermissions() {
+    private func pollSystemState() {
         captureStatusMayHaveChanged(Permissions.captureStatus)
+        let volume = AlertVolume.get()
+        if volume != alertVolume {
+            alertVolume = volume
+            controller?.settingsDidChange()
+        }
         applyVolumeKeys()
     }
 
+    /// The panel banner's button and the first change that needs a route: macOS's prompt
+    /// while the status is not determined, else System Settings → Privacy → Audio Capture
+    /// (denied, or a status the private API cannot tell).
+    private func requestCapture(_ completion: @escaping @MainActor (CaptureStatus) -> Void) {
+        let current = Permissions.captureStatus
+        guard current == .notDetermined else {
+            Permissions.openSettings(for: .audioCapture)
+            captureStatusMayHaveChanged(current)
+            completion(current)
+            return
+        }
+        Permissions.requestCapture { [weak self] status in
+            self?.captureStatusMayHaveChanged(status)
+            completion(status)
+        }
+    }
+
     private func captureStatusMayHaveChanged(_ status: CaptureStatus) {
-        guard status != lastCaptureStatus else { return }
-        lastCaptureStatus = status
+        guard status != captureStatus else { return }
+        captureStatus = status
         controller?.permissionDidChange()
         permissionsWindow?.refresh()
-        updatePermissionPoll()
     }
 
     /// The first launch with System Audio Recording not determined opens the permissions
@@ -257,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func onboardIfNeeded() {
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: Self.didRequestPermissionsKey) else { return }
-        guard Permissions.captureStatus == .notDetermined else { return }
+        guard captureStatus == .notDetermined else { return }
         defaults.set(true, forKey: Self.didRequestPermissionsKey)
         showPermissions()
     }

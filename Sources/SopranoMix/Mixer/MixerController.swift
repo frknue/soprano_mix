@@ -11,6 +11,8 @@ final class MixerController {
     static let persistDelay: TimeInterval = 0.5
     /// Meters update at 30 Hz while the panel is visible.
     static let meterInterval: TimeInterval = 1.0 / 30
+    /// The sound-effects volume is written at most this often while dragged.
+    static let alertWriteInterval: TimeInterval = 0.1
     static let softwareVolumeCaption = "Software volume"
 
     private let processes: AudioProcessSource
@@ -31,10 +33,18 @@ final class MixerController {
     private var tracker = AppListTracker()
     /// Changes the panel, keys or CLI made that settings.json may not hold yet, one per path.
     private var overrides: [SettingOverride] = []
-    /// Paths of overrides not written yet, in the order they first changed.
+    /// Paths of overrides not written yet, in the order they first changed. Pending app
+    /// volumes and software output volumes hold their routes (`heldKeys`, `heldOutputUIDs`).
     private var pendingPaths: [[String]] = []
+    /// Paths whose write failed (settings.json unreadable); retried after the next
+    /// settings change.
+    private var failedPaths: [[String]] = []
     /// Bumped on every change and write, so only the last debounced write runs.
     private var persistGeneration = 0
+    private var isPersisting = false
+    /// The sound-effects volume while it is dragged (written at most every 100 ms).
+    private var draggedAlertVolume: Double?
+    private var lastAlertWrite: TimeInterval?
     private var didRequestCapture = false
     /// Volume keys whose down event was consumed, so their up event is consumed too.
     private var consumedKeys: Set<VolumeKey> = []
@@ -88,7 +98,11 @@ final class MixerController {
             return
         }
         refresh()
-        panel.show(model: model(settings: effectiveSettings), theme: environment.theme(), anchor: anchor)
+        panel.show(
+            model: model(settings: effectiveSettings, capture: environment.captureStatus()),
+            theme: environment.theme(),
+            anchor: anchor
+        )
         panelVisibilityDidChange()
     }
 
@@ -109,7 +123,18 @@ final class MixerController {
     // MARK: - Changes from outside
 
     func settingsDidChange() {
-        refresh()
+        if !failedPaths.isEmpty, !isPersisting {
+            // settings.json changed (perhaps fixed): retry what could not be written.
+            persistPending()
+        } else {
+            refresh()
+        }
+    }
+
+    /// Writes every pending change now and cancels the debounce (quit).
+    func flushPendingSettings() {
+        guard !pendingPaths.isEmpty || !failedPaths.isEmpty else { return }
+        persistPending()
     }
 
     func permissionDidChange() {
@@ -169,9 +194,26 @@ final class MixerController {
             guard let device = snapshot.defaultInput, device.inputVolume != nil else { return }
             devices.setVolume(Self.clamped(percent, to: VolumeLaw.outputRange) / 100, scope: .input, uid: device.uid)
         case .soundEffects:
-            environment.setAlertVolume(Self.clamped(percent, to: VolumeLaw.outputRange))
-            refresh()
+            setAlertVolume(Self.clamped(percent, to: VolumeLaw.outputRange), final: isFinal)
         }
+    }
+
+    /// The alert volume is written when final and at most every 100 ms while dragged; the
+    /// panel shows the dragged value in between.
+    private func setAlertVolume(_ percent: Double, final isFinal: Bool) {
+        let now = environment.now()
+        if isFinal {
+            environment.setAlertVolume(percent)
+            draggedAlertVolume = nil
+            lastAlertWrite = nil
+        } else {
+            draggedAlertVolume = percent
+            if lastAlertWrite.map({ now - $0 >= Self.alertWriteInterval }) ?? true {
+                environment.setAlertVolume(percent)
+                lastAlertWrite = now
+            }
+        }
+        refresh()
     }
 
     private func toggleDeviceMute(_ role: DeviceRole) {
@@ -420,10 +462,11 @@ final class MixerController {
                 pendingPaths.append(entry.path)
             }
         }
-        refresh()
         if isFinal {
+            // Writes, then re-plans once with the routes no longer held.
             persistPending()
         } else {
+            refresh()
             persistGeneration += 1
             let generation = persistGeneration
             environment.schedule(Self.persistDelay) { [weak self] in
@@ -433,15 +476,49 @@ final class MixerController {
         }
     }
 
+    /// Writes every pending and failed path. A failed write stays (retried after the next
+    /// settings change); overrides the file then holds are dropped, since a write that
+    /// changes nothing fires no settings change.
     private func persistPending() {
+        guard !isPersisting else { return }
+        isPersisting = true
         // A debounced write still waiting finds nothing to do.
         persistGeneration += 1
-        let paths = pendingPaths
+        var paths = failedPaths
+        for path in pendingPaths where !paths.contains(path) {
+            paths.append(path)
+        }
         pendingPaths = []
+        failedPaths = []
         for path in paths {
             guard let entry = overrides.first(where: { $0.path == path }) else { continue }
-            environment.writeSetting(entry.value, path)
+            if !environment.writeSetting(entry.value, path) {
+                failedPaths.append(path)
+            }
         }
+        isPersisting = false
+        refresh()
+    }
+
+    /// Apps whose volume change is still in progress keep their route (`heldKeys`).
+    private var heldKeys: Set<AppKey> {
+        var keys: Set<AppKey> = []
+        for case let .appVolume(key, _) in overrides where pendingPaths.contains(["apps", key.rawValue, "volume"]) {
+            keys.insert(key)
+        }
+        return keys
+    }
+
+    /// Outputs whose software volume change is still in progress keep their master route.
+    private func heldOutputUIDs(in snapshot: DeviceSnapshot) -> Set<String> {
+        var uids: Set<String> = []
+        for case let .outputVolume(name, _) in overrides where pendingPaths.contains(["outputs", name, "volume"]) {
+            for device in snapshot.outputs
+            where device.uid == name || device.name.caseInsensitiveCompare(name) == .orderedSame {
+                uids.insert(device.uid)
+            }
+        }
+        return uids
     }
 
     // MARK: - Capture
@@ -478,8 +555,15 @@ final class MixerController {
     private func refreshOnce() {
         let fileSettings = environment.settings()
         // Written changes the file now holds are no longer needed.
-        overrides.removeAll { !pendingPaths.contains($0.path) && $0.isSatisfied(by: fileSettings) }
-        let settings = effectiveSettings
+        overrides.removeAll { entry in
+            !pendingPaths.contains(entry.path) && !failedPaths.contains(entry.path) && entry.isSatisfied(by: fileSettings)
+        }
+        var settings = fileSettings
+        for entry in overrides {
+            entry.apply(to: &settings)
+        }
+        let snapshot = devices.snapshot
+        let capture = environment.captureStatus()
 
         apps = AudioAppResolver.apps(from: processes.processes, ownPID: environment.ownPID)
         listedApps = tracker.update(apps: apps, settings: settings)
@@ -490,9 +574,11 @@ final class MixerController {
         let next = RoutePlanner.plan(
             apps: apps,
             settings: settings,
-            devices: devices.snapshot,
+            devices: snapshot,
             meteredKeys: meteredKeys,
-            canCapture: environment.captureStatus().allowsRoutes
+            canCapture: capture.allowsRoutes,
+            heldKeys: heldKeys,
+            heldOutputUIDs: heldOutputUIDs(in: snapshot)
         )
         if next != plan {
             plan = next
@@ -500,19 +586,19 @@ final class MixerController {
         }
         setMetersRunning(metersOn)
         if visible {
-            panel.update(model: model(settings: settings), theme: environment.theme())
+            panel.update(model: model(settings: settings, capture: capture), theme: environment.theme())
         }
     }
 
-    private func model(settings: SopranoMixSettings) -> MixPanelModel {
+    private func model(settings: SopranoMixSettings, capture: CaptureStatus) -> MixPanelModel {
         MixerModelBuilder.model(
             listedApps: listedApps,
             settings: settings,
             devices: devices.snapshot,
             statuses: router.statuses,
-            capture: environment.captureStatus(),
+            capture: capture,
             settingsIssueCount: environment.settingsIssueCount(),
-            alertVolume: environment.alertVolume(),
+            alertVolume: draggedAlertVolume ?? environment.alertVolume(),
             icons: { app in self.icons.icon(for: app) }
         )
     }

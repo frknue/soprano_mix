@@ -110,8 +110,8 @@ struct SettingsCenterTests {
         let center = SettingsCenter(fileURL: url)
         center.start(watching: false)
 
-        try center.write(35, at: ["apps", "wine:TEKKEN 8", "volume"])
-        try center.write(false, at: ["app", "startAtLogin"])
+        #expect(center.write(35, at: ["apps", "wine:TEKKEN 8", "volume"]))
+        #expect(center.write(false, at: ["app", "startAtLogin"]))
 
         let text = try SettingsFile.read(at: url)
         #expect(text.contains("// My mixer."))
@@ -133,10 +133,26 @@ struct SettingsCenterTests {
         let center = SettingsCenter(fileURL: url)
         center.start(watching: false)
 
-        try center.write(false, at: ["panel", "meters"])
+        #expect(center.write(false, at: ["panel", "meters"]))
 
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: url.path) == target.path)
         #expect(try SettingsFile.read(at: target).contains("meters"))
         #expect(center.settings.panel.meters == false)
+    }
+
+    @Test("a write into a document that does not parse fails and leaves the file as it was")
+    func writeIntoBrokenDocumentFails() throws {
+        let url = temporaryFileURL()
+        defer { removeDirectory(of: url) }
+        let center = SettingsCenter(fileURL: url)
+        center.start(watching: false)
+        let broken = #"{ "audio": { "bufferFrames": "#
+        try SettingsFile.write(broken, to: url)
+        center.reload()
+
+        #expect(!center.write(35, at: ["apps", "wine:TEKKEN 8", "volume"]))
+
+        #expect(try SettingsFile.read(at: url) == broken)
+        #expect(center.settings.audio(for: .wine("TEKKEN 8")).volume == 100)
     }
 }

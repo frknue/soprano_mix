@@ -358,29 +358,30 @@ final class SampleRatePopup: PanelFlippedView {
         menu.autoenablesItems = false
         menu.appearance = theme.appearance.nsAppearance
         guard let menuModel else { return menu }
-        for (index, rate) in menuModel.rates.enumerated() {
+        for rate in menuModel.rates {
             let item = NSMenuItem(
                 title: MixerModelBuilder.sampleRateTitle(rate),
                 action: #selector(chooseItem(_:)),
                 keyEquivalent: ""
             )
             item.target = self
-            item.tag = index
+            item.representedObject = NSNumber(value: rate)
             item.state = rate == menuModel.selected ? .on : .off
             menu.addItem(item)
         }
         return menu
     }
 
-    /// Chooses `rate` as a menu click would.
+    /// Chooses `rate` as a menu click would: only while it is still one of the current
+    /// rates and not the selected one (the rates can change while the menu is open).
     func select(rate: Double) {
         guard let menuModel, menuModel.rates.contains(rate), rate != menuModel.selected else { return }
         onSelect?(rate)
     }
 
     @objc private func chooseItem(_ sender: NSMenuItem) {
-        guard let rates = menuModel?.rates, rates.indices.contains(sender.tag) else { return }
-        select(rate: rates[sender.tag])
+        guard let rate = (sender.representedObject as? NSNumber)?.doubleValue else { return }
+        select(rate: rate)
     }
 
     private func openMenu() {

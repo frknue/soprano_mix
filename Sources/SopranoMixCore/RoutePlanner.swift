@@ -3,12 +3,18 @@ import Foundation
 /// Settings + connected apps + devices → the routes (taps) that must exist. Apps with
 /// default settings get none, so their audio stays untouched.
 public enum RoutePlanner {
+    /// `heldKeys` (apps whose volume change is still in progress: a drag, key steps) keep
+    /// their replace route even at default settings, and `heldOutputUIDs` keep the master
+    /// route at unity gain, so passing 100 % never tears a tap down and builds it again
+    /// mid-gesture. The route goes once the change is final.
     public static func plan(
         apps: [AudioApp],
         settings: SopranoMixSettings,
         devices: DeviceSnapshot,
         meteredKeys: Set<AppKey>,
-        canCapture: Bool
+        canCapture: Bool,
+        heldKeys: Set<AppKey> = [],
+        heldOutputUIDs: Set<String> = []
     ) -> RoutePlan {
         guard canCapture, let defaultUID = devices.defaultOutputUID else { return .empty }
         let defaultDevice = devices.defaultOutput
@@ -20,7 +26,7 @@ public enum RoutePlanner {
             let audio = settings.audio(for: app.key)
             let target = devices.output(matching: audio.output) ?? defaultDevice
             let targetUID = target?.uid ?? defaultUID
-            guard audio.volume != 100 || audio.muted || targetUID != defaultUID else { continue }
+            guard audio.volume != 100 || audio.muted || targetUID != defaultUID || heldKeys.contains(app.key) else { continue }
             let outputGain = target.map { softwareGain(for: $0, settings: settings) } ?? 1
             routes.append(RouteSpec(
                 key: app.key,
@@ -50,7 +56,7 @@ public enum RoutePlanner {
         var master: MasterRouteSpec?
         if let defaultDevice, defaultDevice.outputVolume == nil {
             let gain = softwareGain(for: defaultDevice, settings: settings)
-            if gain != 1 {
+            if gain != 1 || heldOutputUIDs.contains(defaultDevice.uid) {
                 let excluded = Set(routes.filter { $0.mode == .replace }.flatMap(\.processObjectIDs))
                 master = MasterRouteSpec(
                     outputDeviceUID: defaultDevice.uid,

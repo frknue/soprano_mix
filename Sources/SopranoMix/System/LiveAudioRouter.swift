@@ -6,8 +6,9 @@ import SopranoMixCore
 ///
 /// The main actor diffs plans and owns statuses and each route's `RouteParameters`
 /// (gain and limiter changes apply without any HAL call). Building, updating the tap's
-/// process list and destroying run on one private serial queue (`RouteWorker`); results
-/// come back to the main actor in order. Only `stopAll` waits for that queue.
+/// process list and destroying run on one private serial queue (`RouteWorker`), one plan
+/// per queue turn; results come back to the main actor in order. Only `stopAll` waits
+/// for that queue.
 @MainActor
 final class LiveAudioRouter: AudioRouting {
     private(set) var statuses: [AppKey: RouteStatus] = [:]
@@ -17,18 +18,27 @@ final class LiveAudioRouter: AudioRouting {
     private struct Entry {
         var configuration: AudioRouteConfiguration
         var parameters: RouteParameters
-        /// Identifies one build; results of older builds are ignored.
+        /// Identifies one build request; results of older ones are ignored.
         var generation: Int
         var status: RouteStatus
         var diagnostics: RouteDiagnostics?
+        /// `now()` of the last build (or worker rebuild) of this route.
+        var lastAttempt: TimeInterval
     }
+
+    /// A failed route with an unchanged configuration is retried on a plan change only
+    /// this long after its last build attempt.
+    static let retryInterval: TimeInterval = 2
 
     private var entries: [RouteID: Entry] = [:]
     private var lastPlan: RoutePlan?
     private var nextGeneration = 0
     private let worker = RouteWorker()
+    private let now: () -> TimeInterval
 
-    init() {
+    /// `now` is a monotonic clock in seconds (injectable for tests).
+    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
         worker.report = { [weak self] id, generation, result in
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
@@ -42,19 +52,7 @@ final class LiveAudioRouter: AudioRouting {
         guard plan != lastPlan else { return }
         lastPlan = plan
 
-        var wanted: [(RouteID, AudioRouteConfiguration, RouteParameters.Values)] = plan.routes.map { spec in
-            (
-                .app(spec.key),
-                AudioRouteConfiguration(
-                    kind: spec.mode == .replace ? .replace : .meter,
-                    name: "Soprano Mix \(spec.key.rawValue)",
-                    processObjectIDs: spec.processObjectIDs,
-                    outputDeviceUID: spec.outputDeviceUID,
-                    bufferFrames: spec.bufferFrames
-                ),
-                RouteParameters.Values(gain: spec.gain, limiter: spec.limiter)
-            )
-        }
+        var wanted: [(RouteID, AudioRouteConfiguration, RouteParameters.Values)] = []
         if let master = plan.master {
             wanted.append((
                 .master,
@@ -68,28 +66,89 @@ final class LiveAudioRouter: AudioRouting {
                 RouteParameters.Values(gain: master.gain, limiter: false)
             ))
         }
+        for spec in plan.routes {
+            wanted.append((
+                .app(spec.key),
+                AudioRouteConfiguration(
+                    kind: spec.mode == .replace ? .replace : .meter,
+                    name: "Soprano Mix \(spec.key.rawValue)",
+                    processObjectIDs: spec.processObjectIDs,
+                    outputDeviceUID: spec.outputDeviceUID,
+                    bufferFrames: spec.bufferFrames
+                ),
+                RouteParameters.Values(gain: spec.gain, limiter: spec.limiter)
+            ))
+        }
+
+        // One queue turn, in this order: master builds and exclusion shrinks (processes
+        // whose app route goes away fall back to the master before their taps are
+        // destroyed), removals, app builds and updates, master exclusion growth (new app
+        // routes exist before the master stops covering their processes).
+        var masterFirst: [RouteWorker.Operation] = []
+        var removals: [RouteWorker.Operation] = []
+        var appOperations: [RouteWorker.Operation] = []
+        var masterLast: [RouteWorker.Operation] = []
 
         let wantedIDs = Set(wanted.map(\.0))
         for id in entries.keys.sorted() where !wantedIDs.contains(id) {
             entries[id] = nil
-            worker.remove(id)
+            removals.append(.remove(id))
         }
 
+        let time = now()
         for (id, configuration, values) in wanted {
-            if var entry = entries[id], entry.configuration.isSameRoute(as: configuration), !entry.status.isFailed {
+            if var entry = entries[id], entry.configuration.isSameRoute(as: configuration),
+               !entry.status.isFailed
+               || (entry.configuration == configuration && time - entry.lastAttempt < Self.retryInterval) {
+                // Same route: new gain and limiter at once. A failed route stays failed
+                // until its configuration changes or the retry interval has passed.
                 entry.parameters.set(gain: values.gain, limiter: values.limiter)
-                if entry.configuration.processObjectIDs != configuration.processObjectIDs {
-                    worker.update(id, generation: entry.generation, configuration: configuration, parameters: entry.parameters)
+                if !entry.status.isFailed, entry.configuration.processObjectIDs != configuration.processObjectIDs {
+                    let update = { (processes: [AudioObjectID]) -> RouteWorker.Operation in
+                        var step = configuration
+                        step.processObjectIDs = processes
+                        return .update(id, generation: entry.generation, configuration: step, parameters: entry.parameters)
+                    }
+                    if id == .master {
+                        let old = Set(entry.configuration.processObjectIDs)
+                        let new = Set(configuration.processObjectIDs)
+                        let kept = old.intersection(new)
+                        let shrinks = kept != old
+                        let grows = kept != new
+                        if shrinks, grows {
+                            masterFirst.append(update(kept.sorted()))
+                            masterLast.append(update(configuration.processObjectIDs))
+                        } else if grows {
+                            masterLast.append(update(configuration.processObjectIDs))
+                        } else {
+                            masterFirst.append(update(configuration.processObjectIDs))
+                        }
+                    } else {
+                        appOperations.append(update(configuration.processObjectIDs))
+                    }
                 }
                 entry.configuration = configuration
                 entries[id] = entry
             } else {
                 nextGeneration += 1
                 let parameters = RouteParameters(gain: values.gain, limiter: values.limiter)
-                entries[id] = Entry(configuration: configuration, parameters: parameters, generation: nextGeneration, status: .starting)
-                worker.build(id, generation: nextGeneration, configuration: configuration, parameters: parameters)
+                entries[id] = Entry(
+                    configuration: configuration,
+                    parameters: parameters,
+                    generation: nextGeneration,
+                    status: .starting,
+                    lastAttempt: time
+                )
+                let build = RouteWorker.Operation.build(id, generation: nextGeneration, configuration: configuration, parameters: parameters)
+                if id == .master {
+                    masterFirst.append(build)
+                } else {
+                    appOperations.append(build)
+                }
             }
         }
+
+        worker.perform(masterFirst + removals + appOperations + masterLast)
         publish()
     }
 
@@ -118,6 +177,10 @@ final class LiveAudioRouter: AudioRouting {
     private func receive(id: RouteID, generation: Int, result: RouteWorker.Result) {
         guard var entry = entries[id], entry.generation == generation else { return }
         switch result {
+        case .starting:
+            entry.status = .starting
+            entry.diagnostics = nil
+            entry.lastAttempt = now()
         case .running(let diagnostics):
             entry.status = .running
             entry.diagnostics = diagnostics
@@ -168,18 +231,28 @@ private extension RouteStatus {
 
 /// The router's serial queue and the routes living on it.
 ///
-/// `@unchecked Sendable`: `routes` is only read and written on `queue` (every method
-/// hops there; `stopAll` synchronously), and `report` is set once in the router's
-/// initializer before any work is queued.
+/// `@unchecked Sendable`: `routes` and `buildCount` are only read and written on `queue`
+/// (every method hops there; `stopAll` synchronously), and `report` is set once in the
+/// router's initializer before any work is queued.
 private final class RouteWorker: @unchecked Sendable {
     enum Result: Sendable {
+        /// A live route is being rebuilt (its streams changed or an in-place update failed).
+        case starting
         case running(RouteDiagnostics)
         case failed(String)
     }
 
+    enum Operation: Sendable {
+        /// Replaces any route under the id with a new one.
+        case build(RouteID, generation: Int, configuration: AudioRouteConfiguration, parameters: RouteParameters)
+        /// Changes the tap's process list in place; rebuilds when that fails.
+        case update(RouteID, generation: Int, configuration: AudioRouteConfiguration, parameters: RouteParameters)
+        case remove(RouteID)
+    }
+
     private struct LiveRoute {
         var generation: Int
-        /// Unique per build, so a late failure of a replaced route never hits its successor.
+        /// Unique per build, so a late event of a replaced route never hits its successor.
         var build: Int
         var route: AudioRoute
     }
@@ -189,28 +262,25 @@ private final class RouteWorker: @unchecked Sendable {
     private var routes: [RouteID: LiveRoute] = [:]
     private var buildCount = 0
 
-    /// Tears down any route under `id`, then builds a new one.
-    func build(_ id: RouteID, generation: Int, configuration: AudioRouteConfiguration, parameters: RouteParameters) {
+    /// Runs `operations` in order, in one queue turn.
+    func perform(_ operations: [Operation]) {
+        guard !operations.isEmpty else { return }
         queue.async { [self] in
-            rebuild(id, generation: generation, configuration: configuration, parameters: parameters)
-        }
-    }
-
-    /// Changes the tap's process list in place; rebuilds when that fails or the route is
-    /// not live.
-    func update(_ id: RouteID, generation: Int, configuration: AudioRouteConfiguration, parameters: RouteParameters) {
-        queue.async { [self] in
-            if let live = routes[id], live.generation == generation,
-               live.route.updateProcesses(configuration.processObjectIDs) {
-                return
+            for operation in operations {
+                switch operation {
+                case let .build(id, generation, configuration, parameters):
+                    replace(id, generation: generation, configuration: configuration, parameters: parameters)
+                case let .update(id, generation, configuration, parameters):
+                    if let live = routes[id], live.generation == generation,
+                       live.route.updateProcesses(configuration.processObjectIDs) {
+                        continue
+                    }
+                    report?(id, generation, .starting)
+                    replace(id, generation: generation, configuration: configuration, parameters: parameters)
+                case let .remove(id):
+                    routes.removeValue(forKey: id)?.route.teardown()
+                }
             }
-            rebuild(id, generation: generation, configuration: configuration, parameters: parameters)
-        }
-    }
-
-    func remove(_ id: RouteID) {
-        queue.async { [self] in
-            routes.removeValue(forKey: id)?.route.teardown()
         }
     }
 
@@ -224,9 +294,12 @@ private final class RouteWorker: @unchecked Sendable {
         }
     }
 
-    private func rebuild(_ id: RouteID, generation: Int, configuration: AudioRouteConfiguration, parameters: RouteParameters) {
+    /// Silences the live route under `id` (if any), builds and starts the new one, then
+    /// tears the old one down: the app is never heard unprocessed in between.
+    private func replace(_ id: RouteID, generation: Int, configuration: AudioRouteConfiguration, parameters: RouteParameters) {
         dispatchPrecondition(condition: .onQueue(queue))
-        routes.removeValue(forKey: id)?.route.teardown()
+        let old = routes.removeValue(forKey: id)
+        old?.route.silence()
         buildCount += 1
         let build = buildCount
         do {
@@ -234,25 +307,33 @@ private final class RouteWorker: @unchecked Sendable {
                 configuration: configuration,
                 parameters: parameters,
                 queue: queue
-            ) { [weak self] reason in
-                // On `queue`, inside the HAL listener: leave the callback before tearing down.
+            ) { [weak self] event in
+                // On `queue`, inside the HAL listener: leave the callback first.
                 guard let self else { return }
                 self.queue.async { [weak self] in
-                    self?.fail(id, build: build, reason: reason)
+                    self?.handle(event, id: id, build: build)
                 }
             }
             routes[id] = LiveRoute(generation: generation, build: build, route: route)
+            old?.route.teardown()
             report?(id, generation, .running(route.diagnostics))
         } catch {
+            old?.route.teardown()
             report?(id, generation, .failed(Self.reason(for: error)))
         }
     }
 
-    private func fail(_ id: RouteID, build: Int, reason: String) {
+    private func handle(_ event: AudioRouteEvent, id: RouteID, build: Int) {
         guard let live = routes[id], live.build == build else { return }
-        live.route.teardown()
-        routes[id] = nil
-        report?(id, live.generation, .failed(reason))
+        switch event {
+        case .deviceGone:
+            live.route.teardown()
+            routes[id] = nil
+            report?(id, live.generation, .failed(AudioRouteError.deviceMissing.description))
+        case .layoutChanged:
+            report?(id, live.generation, .starting)
+            replace(id, generation: live.generation, configuration: live.route.configuration, parameters: live.route.parameters)
+        }
     }
 
     private static func reason(for error: Error) -> String {

@@ -76,11 +76,20 @@ final class SettingsCenter {
     }
 
     /// Sets one value in settings.json, keeping its comments and key order, and applies it.
-    func write(_ value: Any, at path: [String]) throws {
-        let text = (try? SettingsFile.read(at: fileURL)) ?? SettingsTemplate.text
-        let edited = try SettingsEditor.setting(value, at: path, in: text)
-        try SettingsFile.write(edited, to: fileURL)
+    /// False (logged) when the file could not be edited, e.g. while it does not parse.
+    @discardableResult
+    func write(_ value: Any, at path: [String]) -> Bool {
+        do {
+            let text = (try? SettingsFile.read(at: fileURL)) ?? SettingsTemplate.text
+            let edited = try SettingsEditor.setting(value, at: path, in: text)
+            try SettingsFile.write(edited, to: fileURL)
+        } catch {
+            let key = path.joined(separator: ".")
+            settingsLog.error("Could not write \(key, privacy: .public) to \(self.displayPath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
         reload()
+        return true
     }
 
     /// Handlers fire after the settings change, until `owner` is deallocated.

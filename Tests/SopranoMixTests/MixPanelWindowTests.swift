@@ -200,6 +200,36 @@ struct MixPanelWindowTests {
         ])
     }
 
+    @Test("a menu click reports the device it showed even when the list changed while the menu was open")
+    func menuChoiceResolvesByIdentity() {
+        let builtin = DeviceMenuItem(uid: "builtin", title: "MacBook Pro Speakers", symbolName: "laptopcomputer", isSelected: true)
+        let airpods = DeviceMenuItem(uid: "airpods", title: "Furkan's AirPods Pro", symbolName: "headphones", isSelected: false)
+        let odyssey = DeviceMenuItem(uid: "odyssey", title: "Odyssey G91F", symbolName: "tv", isSelected: false)
+        let button = DeviceMenuButton(form: .full, accessibilityLabel: "Output device")
+        var chosen: [String?] = []
+        button.onSelect = { chosen.append($0) }
+        button.configure(title: builtin.title, symbolName: builtin.symbolName, items: [builtin, airpods, odyssey], theme: .folioPaper)
+        let menu = button.makeMenu()
+
+        button.configure(title: builtin.title, symbolName: builtin.symbolName, items: [odyssey, builtin, airpods], theme: .folioPaper)
+        menu.performActionForItem(at: 1)
+        #expect(chosen == ["airpods"])
+
+        button.configure(title: builtin.title, symbolName: builtin.symbolName, items: [builtin, odyssey], theme: .folioPaper)
+        menu.performActionForItem(at: 1)
+        menu.performActionForItem(at: 0)
+        #expect(chosen == ["airpods"])
+
+        let popup = SampleRatePopup()
+        var rates: [Double] = []
+        popup.onSelect = { rates.append($0) }
+        popup.configure(SampleRateMenu(title: "48 kHz", rates: [44_100, 48_000], selected: 48_000), theme: .folioPaper)
+        let rateMenu = popup.makeMenu()
+        popup.configure(SampleRateMenu(title: "48 kHz", rates: [48_000, 96_000, 44_100], selected: 48_000), theme: .folioPaper)
+        rateMenu.performActionForItem(at: 0)
+        #expect(rates == [44_100])
+    }
+
     @Test("choosing the device that is already selected reports nothing")
     func selectedDeviceIsNoOp() throws {
         let window = MixPanelWindow()

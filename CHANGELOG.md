@@ -23,4 +23,5 @@ All notable changes to Soprano Mix are documented here. The format follows
 - Command line: `SopranoMix list`, `devices`, `set <app> <0-400>`, `mute <app>`, `unmute <app>`, `output <app> <device|default>`, `show`, `hide` against the running app with JSON output; app names with spaces work quoted or unquoted.
 - `SopranoMix scan [--all]` prints every audio process and how it is grouped into apps, without the running app or any permission.
 - `SopranoMix selftest` routes a test tone through a real process tap and reports peaks, latency and pass or fail.
-- Permissions window for System Audio Recording and Accessibility: it opens once on first launch, and grants made in System Settings apply without a relaunch.
+- Permissions window for System Audio Recording and Accessibility: it opens once on first launch, and grants made in System Settings apply without a relaunch; once access was denied, the panel's "Open Settings" goes straight to the System Settings pane.
+- Only one Soprano Mix runs at a time: a second launch (installed app or dev build) quits at once, so no app is routed twice.

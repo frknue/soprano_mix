@@ -24,6 +24,10 @@ SoundSource's documented behavior; no SoundSource code is used.
 never restarts a running Soprano Mix; the update applies on the next launch. Launch at
 login is on by default.
 
+Only one Soprano Mix runs at a time: two would tap and replay every app twice. A second
+launch, of the installed app or the dev build (`com.soprano.mix.dev`), quits at once
+while another one runs.
+
 The first launch opens the permissions window once:
 
 - **System Audio Recording** (required to change an app): click Allow and confirm macOS's
@@ -63,8 +67,9 @@ From top to bottom:
   which opens the same menu as a right click on the menu-bar icon.
 
 While nothing plays, the list says *Nothing is playing*. While System Audio Recording is
-missing, a banner above the apps asks for it ("Allow", or "Open Settings" once it was
-denied).
+missing, a banner above the apps asks for it: "Allow" shows macOS's prompt; once it was
+denied, "Open Settings" opens System Settings → Privacy & Security at the audio recording
+list, because macOS does not ask twice.
 
 Keyboard: the panel takes the keys while it is open. `←`/`→` change the focused slider by
 1 % (`⇧` for 10 %), `⎋` closes. A global hotkey can open the panel from anywhere
@@ -141,7 +146,8 @@ plays and drag its slider, or from a terminal:
 ```
 
 The setting is saved as `"wine:TEKKEN 8": { "volume": 35 }` and applies every time the
-game plays again. The icon comes from the game's .exe in the CrossOver bottle.
+game plays again. The icon comes from the game's .exe in its CrossOver bottle, wherever
+CrossOver keeps its bottles (its Bottle location preference, also on an external drive).
 
 ## Settings
 
@@ -347,6 +353,8 @@ identity, so both grants survive reinstalling and rebuilding.
 - **The CLI says "Soprano Mix is not running."** Start the app; the dev build
   (`com.soprano.mix.dev`) and the installed app have separate CLI ports, so use the binary
   of the app you started.
+- **Soprano Mix quits right after it starts.** Another Soprano Mix runs (the installed
+  app or the dev build); quit that one first.
 
 ## Development
 
@@ -366,9 +374,14 @@ swift test
 `DEVELOPER_DIR` pins the Command Line Tools SDK, because Homebrew Swift can't read Xcode's
 newer one. `snapshot` runs the real mixer and panel on fake processes and devices
 offscreen, without permissions or audio (`--scenario standard|game|crowded|quiet`,
-`--settings <jsonc>`, `--capture granted|notDetermined|denied`, `--report <json>`). The
-dev app (`com.soprano.mix.dev`) has its own permissions, and its command line only reaches
-the dev app. Signing uses `SOPRANO_MIX_CODESIGN_IDENTITY` / `SOPRANO_MIX_CODESIGN_KEYCHAIN`
+`--settings <jsonc>`, `--capture granted|notDetermined|denied`, `--report <json>`).
+
+`scripts/dev.sh` quits a running Soprano Mix Dev and waits for it to exit, packages the new
+build and opens it. Since only one Soprano Mix runs at a time, it stops with a hint
+instead of launching while the installed app runs: quit that first. The dev app
+(`com.soprano.mix.dev`) shares settings.json with the installed app, has its own
+permissions, never registers as a login item, and its command line only reaches the dev
+app. Signing uses `SOPRANO_MIX_CODESIGN_IDENTITY` / `SOPRANO_MIX_CODESIGN_KEYCHAIN`
 when set, else the shared local identity. The design system
 (`Sources/SopranoMix/Vendored/`) comes from Soprano; update it with
 `scripts/sync-soprano-chrome.sh` instead of editing it here. `docs/ARCHITECTURE.md`

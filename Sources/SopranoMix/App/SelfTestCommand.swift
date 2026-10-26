@@ -166,11 +166,13 @@ enum SelfTestCommand {
         }
         let router = LiveAudioRouter()
         defer {
-            router.stopAll()
+            // afplay first: tearing the route down while it still plays would let the
+            // tone through unmuted (audible with `--silent`).
             if player.isRunning {
                 player.terminate()
                 player.waitUntilExit()
             }
+            router.stopAll()
         }
 
         // afplay's own process object; routed as soon as it exists so `--silent` mutes

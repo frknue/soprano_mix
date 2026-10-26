@@ -140,6 +140,32 @@ struct AudioAppResolverTests {
             == AppIdentity(key: .bundle("com.apple.replayd"), name: "replayd", kind: .system, icon: .symbol("speaker.wave.2")))
     }
 
+    @Test("Siri's speech processes are one app")
+    func siriIsOneApp() {
+        let processes = [
+            AudioProcessFacts(objectID: 140, pid: 54279, bundleID: "com.apple.CoreSpeech", isRunningOutput: true),
+            AudioProcessFacts(objectID: 149, pid: 51626, bundleID: "com.apple.assistantd"),
+            AudioProcessFacts(objectID: 132, pid: 368, bundleID: "com.apple.corespeechd_system"),
+        ]
+        let apps = AudioAppResolver.apps(from: processes, ownPID: ownPID)
+        #expect(apps.count == 1)
+        #expect(apps.first?.key == .bundle("com.apple.assistantd"))
+        #expect(apps.first?.processObjectIDs == [132, 140, 149])
+        #expect(apps.first?.isPlaying == true)
+    }
+
+    @Test("a Wine process with unreadable argv is CrossOver (Windows), never the launcher or its temp file")
+    func wineWithoutArguments() {
+        let process = AudioProcessFacts(
+            objectID: 179, pid: 76333, bundleID: "com.codeweavers.CrossOver.wineloader",
+            executablePath: "/private/var/folders/h4/x/T/winetemp-1-2-3-0/gameoverlayui64.exe",
+            responsible: crossOver
+        )
+        let identity = AudioAppResolver.identity(for: process, ownPID: ownPID)
+        #expect(identity?.name == "CrossOver (Windows)")
+        #expect(identity?.key == .bundle("com.codeweavers.CrossOver.wineloader"))
+    }
+
     @Test("an app bundle process without a running app folds into its enclosing app")
     func enclosingApp() {
         let process = AudioProcessFacts(

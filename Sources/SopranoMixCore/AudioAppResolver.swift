@@ -13,7 +13,18 @@ public enum AudioAppResolver {
         "com.apple.speech.speechsynthesisd": "Spoken Content",
         "com.apple.avconferenced": "FaceTime",
         "com.apple.accessibility.heard": "Hearing",
+        // Only reached when a Wine process's argv (its Windows path) cannot be read; its
+        // executable path is then a temporary copy with a misleading name.
+        "com.codeweavers.CrossOver.wineloader": "CrossOver (Windows)",
     ]
+
+    /// Friendly names served by several processes share one key, so they are one row
+    /// and one settings entry.
+    private static let systemKeys: [String: String] = [
+        "Siri": "com.apple.assistantd",
+    ]
+
+    private static let wineLoaderBundleID = "com.codeweavers.CrossOver.wineloader"
 
     /// One process's identity; nil for Soprano Mix itself (`pid == ownPID`).
     public static func identity(for process: AudioProcessFacts, ownPID: Int32) -> AppIdentity? {
@@ -108,6 +119,12 @@ public enum AudioAppResolver {
             )
         }
 
+        // A Wine process whose Windows path could not be read: CrossOver may be its
+        // responsible app, but folding a game into the CrossOver launcher would hide it.
+        if process.bundleID == wineLoaderBundleID {
+            return systemResolution(process)
+        }
+
         // 4. The responsible app: helpers, renderers, WebKit GPU, XPC services.
         if let responsible = process.responsible, responsible.pid != process.pid {
             return Resolution(
@@ -148,6 +165,10 @@ public enum AudioAppResolver {
         }
 
         // 7. A bundled system process (rule 3 guarantees a bundle id here).
+        return systemResolution(process)
+    }
+
+    private static func systemResolution(_ process: AudioProcessFacts) -> Resolution {
         let bundleID = process.bundleID ?? ""
         let executable = lastComponent(process.executablePath)
         let name = systemNames[bundleID]
@@ -160,7 +181,7 @@ public enum AudioAppResolver {
         default: "speaker.wave.2"
         }
         return Resolution(
-            identity: AppIdentity(key: .bundle(bundleID), name: name, kind: .system, icon: .symbol(symbol)),
+            identity: AppIdentity(key: .bundle(systemKeys[name] ?? bundleID), name: name, kind: .system, icon: .symbol(symbol)),
             isAppItself: false
         )
     }

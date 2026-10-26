@@ -13,6 +13,8 @@ public struct GainStage: Sendable {
     public private(set) var currentGain: Float
     /// The limiter's own gain, 0...1 (1 = not limiting).
     private var limiterGain: Float = 1
+    /// The last buffer ran the limiter.
+    private var wasLimiting = false
     /// Per-sample factor by which the limiter's gain reduction decays.
     private let releaseCoefficient: Float
 
@@ -39,7 +41,11 @@ public struct GainStage: Sendable {
         let count = Float(frames)
         let ceiling = Self.ceiling
         let release = releaseCoefficient
-        var reduction = limiter ? limiterGain : 1
+        // A buffer that ramps out of a boost keeps the limiter it had, even though the new
+        // plan turns it off (target back at or below unity). A boost that stays a boost
+        // follows the plan, so turning the limiter off in settings takes effect at once.
+        let limiting = limiter || (wasLimiting && start > 1 && target <= 1)
+        var reduction = limiting ? limiterGain : 1
         var peakLeft: Float = 0
         var peakRight: Float = 0
 
@@ -51,7 +57,7 @@ public struct GainStage: Sendable {
             if !outLeft.isFinite { outLeft = 0 }
             if !outRight.isFinite { outRight = 0 }
 
-            if limiter {
+            if limiting {
                 reduction = 1 - (1 - reduction) * release
                 let peak = max(abs(outLeft), abs(outRight))
                 if peak * reduction > ceiling {
@@ -74,6 +80,7 @@ public struct GainStage: Sendable {
 
         currentGain = target
         limiterGain = reduction
+        wasLimiting = limiting
         return StereoLevel(left: peakLeft, right: peakRight)
     }
 

@@ -77,6 +77,22 @@ struct GainStageTests {
         #expect(result.left.allSatisfy { $0 == 2 })
     }
 
+    @Test("ramping down out of a limited boost stays under the ceiling when the limiter turns off")
+    func rampDownKeepsLimiter() {
+        var stage = GainStage(sampleRate: sampleRate, gain: 4)
+        _ = run(&stage, left: [Float](repeating: 0.9, count: 64), target: 4, limiter: true)
+        let result = run(&stage, left: [Float](repeating: 0.9, count: 64), target: 0.95, limiter: false)
+        #expect(result.left.allSatisfy { abs($0) <= GainStage.ceiling })
+    }
+
+    @Test("turning the limiter off during a boost passes the boost through at once")
+    func limiterOffDuringBoost() {
+        var stage = GainStage(sampleRate: sampleRate, gain: 2)
+        _ = run(&stage, left: [Float](repeating: 0.9, count: 64), target: 2, limiter: true)
+        let result = run(&stage, left: [Float](repeating: 0.9, count: 64), target: 2, limiter: false)
+        #expect(result.left.allSatisfy { $0 == 1.8 })
+    }
+
     @Test("the limiter releases back to unity gain after a loud burst")
     func releaseRecovery() {
         var stage = GainStage(sampleRate: sampleRate, gain: 1, releaseSeconds: 0.08)

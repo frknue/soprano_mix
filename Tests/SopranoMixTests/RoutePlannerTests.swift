@@ -166,4 +166,25 @@ struct RoutePlannerTests {
         #expect(RoutePlanner.softwareGain(for: speakers, settings: settings) == 1)
         #expect(RoutePlanner.softwareGain(for: monitor, settings: .defaults) == 1)
     }
+
+    @Test("a held app keeps its replace route at 100 percent, at unity gain")
+    func heldAppKeepsRoute() {
+        let settings = SopranoMixSettings()
+        let held = RoutePlanner.plan(apps: apps, settings: settings, devices: devices(defaultOutput: speakers.uid),
+                                     meteredKeys: [], canCapture: true, heldKeys: [spotify.key])
+        #expect(held.routes.map(\.key) == [spotify.key])
+        #expect(held.routes.first?.mode == .replace)
+        #expect(held.routes.first?.gain == 1)
+        #expect(plan(settings) == .empty)
+    }
+
+    @Test("a held software output keeps its master route at unity gain")
+    func heldOutputKeepsMaster() {
+        let settings = SopranoMixSettings()
+        let held = RoutePlanner.plan(apps: apps, settings: settings, devices: devices(defaultOutput: monitor.uid),
+                                     meteredKeys: [], canCapture: true, heldOutputUIDs: [monitor.uid])
+        #expect(held.master?.gain == 1)
+        #expect(held.master?.outputDeviceUID == monitor.uid)
+        #expect(plan(settings, defaultOutput: monitor.uid).master == nil)
+    }
 }
