@@ -300,6 +300,25 @@ struct MixPanelWindowTests {
         #expect(visibility == [true, false])
     }
 
+    @Test("a long output device name is shortened with an ellipsis to fit its chip, short ones stay whole")
+    func longOutputChipTruncates() {
+        var long = app("Discord")
+        long.outputName = "Furkan’s AirPods Pro Max (Second Generation, USB-C) — Living Room"
+        let row = AppRowView(model: long, theme: .folioPaper)
+        row.update(model: long, theme: .folioPaper)
+        row.setFrameSize(NSSize(width: MixPanelGeometry.width, height: AppRowView.height))
+        #expect(row.outputChip.text.hasSuffix("…"))
+        #expect(row.outputChip.fittingSize.width <= row.outputChip.frame.width)
+        #expect(row.outputChip.toolTip == long.outputName)
+
+        var short = app("Spotify")
+        short.outputName = "AirPods"
+        row.update(model: short, theme: .folioPaper)
+        row.setFrameSize(NSSize(width: MixPanelGeometry.width, height: AppRowView.height))
+        #expect(row.outputChip.text == "AirPods")
+        #expect(row.outputChip.fittingSize.width <= row.outputChip.frame.width)
+    }
+
     // MARK: - Fixtures
 
     private func app(_ name: String, volume: Double = 100, muted: Bool = false, playing: Bool = true) -> AppRowModel {

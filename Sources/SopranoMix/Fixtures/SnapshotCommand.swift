@@ -359,6 +359,10 @@ enum SnapshotCommand {
 
     /// `arguments` excludes the executable: ["snapshot", "--out", "/tmp/mix.png"].
     static func run(arguments: [String]) -> Int32 {
+        if arguments.contains("--help") || arguments.contains("-h") {
+            print(usage)
+            return 0
+        }
         let options: Options
         do {
             options = try parse(arguments)

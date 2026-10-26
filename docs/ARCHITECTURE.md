@@ -63,11 +63,13 @@ only for playing apps without a route, only while the panel is visible and
 `panel.meters` is on.
 
 **Software volume** (outputs without hardware volume: HDMI, DisplayPort, some USB DACs):
-one master route with a global tap on that output (`stereoGlobalTapButExcludeProcesses`
-of Soprano Mix's own process object plus every process that has its own route,
-`deviceUID` = the output), replayed at the software gain. App routes to that device
-multiply the software gain into their own gain. Soprano Mix's own process is always
-excluded, so its replayed audio is never captured again.
+one master route with a tap on that output's stream 0
+(`CATapDescription(excludingProcesses:deviceUID:stream:)`, excluding Soprano Mix's own
+process object plus every process that has its own route), muted when tapped and
+replayed channel for channel at the software gain. App routes to that device multiply
+the software gain into their own gain. Soprano Mix's own process is always excluded, so
+its replayed audio is never captured again; when its process object cannot be found the
+master route fails instead of being built.
 
 **Permission**: reading a tap needs System Audio Recording (`kTCCServiceAudioCapture`).
 A tap read without it delivers silence, which with `.mutedWhenTapped` would silence the
@@ -82,10 +84,10 @@ through `dlsym`); without them the status is `unknown` and routes are attempted.
 | `Sources/SopranoMixCore/` | Core | Pure logic, Foundation + CoreGraphics only, no AppKit, no Core Audio: models, settings, keys, app grouping (CrossOver/Wine included), app list, route planning, volume law, DSP, meters, PE icons, CLI messages and app matching. Everything `public`. |
 | `Sources/SopranoMixCore/Vendored/JSONCText.swift` | — | Copied from Soprano by `scripts/sync-soprano-chrome.sh`. **Never edit.** |
 | `Sources/SopranoMix/Vendored/` | — | Soprano chrome (Chrome, Theme, NSColor+Hex, AppVersion), copied by the sync script. **Never edit.** |
-| `Sources/SopranoMix/System/` | System | The only code that touches Core Audio, taps, aggregates, TCC, CGEventTap, Carbon hotkeys, `proc_pidpath`/`sysctl` and private symbols. |
+| `Sources/SopranoMix/System/` | System | The only code that touches Core Audio, taps, aggregates, TCC, CGEventTap, Carbon hotkeys, `proc_pidpath`/`sysctl` and private symbols (plus the System-owned `App/ScanCommand.swift` and `App/SelfTestCommand.swift`). |
 | `Sources/SopranoMix/Mixer/` | Mixer | `MixerController` (state, planning, intents, CLI, volume keys) and `MixerModelBuilder`. |
 | `Sources/SopranoMix/Panel/` | Panel | The menu-bar panel (`MixPanelWindow`), its rows and controls, the volume HUD. |
-| `Sources/SopranoMix/App/`, `Shell/` | Shell | `main.swift`, app delegate (composition root), menu bar, login item, settings file/center, theme center, permissions + window, CLI server/client, `scan` and `selftest` commands. |
+| `Sources/SopranoMix/App/`, `Shell/` | Shell | `main.swift`, app delegate (composition root), menu bar, login item, settings file/center, theme center, permissions + window, CLI server/client. (`App/ScanCommand.swift` and `App/SelfTestCommand.swift` belong to System.) |
 | `Sources/SopranoMix/Fixtures/` | Fixtures | Fake processes, devices, router, icons and the `snapshot` harness. |
 
 ### Contract files
@@ -106,8 +108,8 @@ together with every consumer.
 |---|---|
 | Infra | `Package.swift`, `.gitignore`, `LICENSE`, `Support/Info.plist`, `Support/SopranoMix.entitlements`, `scripts/*.sh`, `scripts/render-app-icon.swift`, `Sources/SopranoMix/Resources/`, `Sources/SopranoMix/Vendored/`, `Sources/SopranoMixCore/Vendored/` |
 | Core | `Core/KeyParsing.swift`, `Core/SettingsResolver.swift`, `Core/SettingsTemplate.swift`, `Core/SettingsEditor.swift`, `Core/SopranoThemeFile.swift`, `Core/WinePath.swift`, `Core/AudioAppResolver.swift`, `Core/AppListTracker.swift`, `Core/RoutePlanner.swift`, `Core/VolumeLaw.swift`, `Core/GainStage.swift`, `Core/MeterBallistics.swift`, `Core/PEIconExtractor.swift`, `Core/AppMatcher.swift`; tests `KeyParsingTests`, `SettingsResolverTests`, `SettingsTemplateTests`, `SettingsEditorTests`, `SopranoThemeFileTests`, `WinePathTests`, `AudioAppResolverTests`, `AppListTrackerTests`, `RoutePlannerTests`, `VolumeLawTests`, `GainStageTests`, `MeterBallisticsTests`, `PEIconExtractorTests`, `AppMatcherTests` |
-| System | `System/PrivateAPIs.swift`, `System/CoreAudioProperties.swift`, `System/ProcessInspector.swift`, `System/LiveAudioProcessSource.swift`, `System/LiveAudioDevices.swift`, `System/LiveAudioRouter.swift`, `System/AudioRoute.swift`, `System/RouteParameters.swift`, `System/LiveAppIconProvider.swift`, `System/VolumeKeyMonitor.swift`, `System/CarbonPanelHotkey.swift`, `System/AlertVolume.swift`, `App/ScanCommand.swift`, `App/SelfTestCommand.swift`; tests `ProcessInspectorTests`, `RouteParametersTests`, `VolumeKeyConversionTests`, `CarbonPanelHotkeyTests` |
-| Mixer | `Mixer/MixerController.swift`, `Mixer/MixerModelBuilder.swift`; tests `MixerControllerTests`, `MixerModelBuilderTests`, `MixerTestSupport` |
+| System | `System/PrivateAPIs.swift`, `System/CoreAudioProperties.swift`, `System/ProcessInspector.swift`, `System/LiveAudioProcessSource.swift`, `System/LiveAudioDevices.swift`, `System/LiveAudioRouter.swift`, `System/AudioRoute.swift`, `System/RouteParameters.swift`, `System/LiveAppIconProvider.swift`, `System/VolumeKeyMonitor.swift`, `System/CarbonPanelHotkey.swift`, `System/AlertVolume.swift`, `App/ScanCommand.swift`, `App/SelfTestCommand.swift`; tests `ProcessInspectorTests`, `RouteParametersTests`, `RouteBufferLayoutTests`, `VolumeKeyConversionTests`, `CarbonPanelHotkeyTests` |
+| Mixer | `Mixer/MixerController.swift`, `Mixer/MixerModelBuilder.swift`; tests `MixerControllerTests`, `MixerModelBuilderTests`, `MixerSettingsIntegrationTests`, `MixerTestSupport` |
 | Panel | `Panel/MixPanelWindow.swift`, `Panel/MixPanelContentView.swift`, `Panel/DeviceSectionView.swift`, `Panel/AppRowView.swift`, `Panel/MixSlider.swift`, `Panel/LevelMeterView.swift`, `Panel/DeviceMenuButton.swift`, `Panel/VolumeHUD.swift`; tests `MixSliderTests`, `MixPanelWindowTests`, `VolumeHUDTests` |
 | Fixtures | `Fixtures/FixtureScenarios.swift`, `Fixtures/FixtureProcessSource.swift`, `Fixtures/FixtureDevices.swift`, `Fixtures/RecordingRouter.swift`, `Fixtures/FixtureIcons.swift`, `Fixtures/SnapshotCommand.swift`; tests `FixtureScenarioTests`, `SnapshotCommandTests` |
 | App shell | `main.swift`, `App/AppDelegate.swift`, `App/MenuBarController.swift`, `App/MenuBarGlyph.swift`, `App/LoginItem.swift`, `App/CLIServer.swift`, `App/CLIClient.swift`, `Shell/SettingsFile.swift`, `Shell/SettingsCenter.swift`, `Shell/ThemeCenter.swift`, `Shell/Permissions.swift`, `Shell/PermissionsWindowController.swift`; tests `SettingsCenterTests`, `ThemeCenterTests`, `CLIRoundTripTests`, `PermissionsWindowTests`, `MenuBarGlyphTests` |
@@ -165,7 +167,7 @@ public enum SettingsEditor {
     /// creating missing objects and keeping comments and key order (vendored `JSONCText`).
     public static func setting(_ value: Any, at path: [String], in text: String) throws -> String
 }
-public enum SopranoThemeFile { /* Soprano Tab's, unchanged: theme + appearance of ~/.config/soprano/settings.json */ }
+public struct SopranoThemeFile { /* Soprano Tab's, unchanged: theme + appearance of ~/.config/soprano/settings.json */ }
 ```
 
 settings.json (every key optional):
@@ -245,15 +247,25 @@ public enum AudioAppResolver {
    `arguments.first`, else `"pid <pid>"`), kind `.executable`, icon `.executable(path:)`.
    Unbundled programs never fold into the app that launched them (`afplay` started from a
    terminal is "afplay", not the terminal).
+   Wine processes whose argv cannot be read (`bundleID ==
+   com.codeweavers.CrossOver.wineloader`) skip to rule 7 here ("CrossOver (Windows)"),
+   so they never fold into the CrossOver launcher.
 4. **Responsible app**: `responsible != nil` and `responsible.pid != pid` → that app's
    bundle id, name and icon (`.bundle(path:)` when it has a path, else
    `.runningApp(pid:)`), kind `.app`. Folds browser renderers, WebKit's GPU process,
    Electron helpers and XPC services into their app.
-5. **The app itself**: `ownApp != nil` → its bundle id, name, icon, kind `.app`.
+5. **The app itself**: `ownApp != nil` → its bundle id, name, icon, kind `.app`, unless
+   the process lives in an `.appex` or `.xpc` bundle inside another app (macOS reports
+   app extensions as running apps too): those go on to rule 6. A nested real `.app`
+   (Simulator inside Xcode) stays itself.
 6. **Inside an app bundle**: `enclosingApp != nil` → that bundle's id, name, icon, kind `.app`.
 7. **Bundled system process**: key `.bundle(bundleID)`, name = `systemNames[bundleID]` ??
    `systemNames[executable name]` ?? the executable name ?? `bundleID`, kind `.system`,
    icon `.symbol("speaker.wave.2")` (`"bell"` for System Sounds, `"waveform"` for Siri).
+
+Every name drops invisible bidi formatting marks (U+200E/F, U+061C, U+202A–E,
+U+2066–9): WhatsApp's bundle name starts with U+200E, which would otherwise break sorting
+and CLI name matching.
 
 `systemNames`: `systemsoundserverd` → "System Sounds", `com.apple.assistantd`,
 `com.apple.CoreSpeech`, `com.apple.corespeechd_system` → "Siri",
@@ -434,11 +446,21 @@ write the same properties; failures are logged, never fatal.
 **Router** (`LiveAudioRouter`): `apply(_ plan:)` diffs against the live routes by key.
 Same target device, mode and buffer size → update in place: gain and limiter through
 `RouteParameters` (lock-free for the IO thread), the process list by setting
-`kAudioTapPropertyDescription` (rebuild if that fails). Anything else → tear down and
-rebuild. Routes no longer planned are stopped and destroyed (IOProc stop, destroy IOProc,
-destroy aggregate, destroy tap, in that order). Building and destroying run on one
-serial queue off the main actor; statuses (`starting`, `running`, `failed(reason)`)
-publish back on the main actor. The aggregate's IO buffer is set to `bufferFrames`.
+`kAudioTapPropertyDescription` (rebuild if that fails). Anything else → rebuild: the old
+route ramps to gain 0, the new one is built and started, then the old one is torn down,
+so the app is never heard unprocessed in between. Routes no longer planned are stopped
+and destroyed (IOProc stop, destroy IOProc, destroy aggregate, destroy tap, in that
+order). A failed route whose configuration is unchanged only takes new parameters; it is
+rebuilt when its configuration changes or on a plan change at least 2 s after its last
+attempt. Each plan runs as one batch on one serial queue off the main actor, ordered so
+no process is ever unprocessed: master changes that only shrink its excluded set,
+removals, app builds and updates, then master changes that grow it. Statuses
+(`starting`, `running`, `failed(reason)`) publish back on the main actor. The
+aggregate's IO buffer is set to `bufferFrames`; only the tap's input stream(s) are
+enabled for the IOProc (`kAudioDevicePropertyIOProcStreamUsage`), so the output
+device's own microphone is never opened. Listeners on the aggregate's stream
+configuration and the tap's format rebuild the route when the layout really changes;
+until then the IOProc renders silence rather than read a wrong buffer.
 
 **IOProc** (`AudioRoute`): real-time safe — no allocation, no locks except
 `os_unfair_lock_trylock`, no Objective-C or Swift runtime calls that may allocate. Per
@@ -448,16 +470,18 @@ Float32 per `kAudioTapPropertyFormat`) into preallocated planar scratch, run
 (L+R)/2; other channels zeroed). Meter mode writes nothing. Records input and output
 peaks (max since the last `takeLevels`).
 
-**Master** route: same pipeline on a global tap; its own process object is found with
-`kAudioHardwarePropertyTranslatePIDToProcessObject` for `getpid()`.
+**Master** route: a tap on the output's stream 0 (see "Software volume"), copied channel
+for channel with a ramped gain (no limiter: the gain never exceeds 1); its own process
+object is found with `kAudioHardwarePropertyTranslatePIDToProcessObject` for `getpid()`.
 
 **Icons** (`LiveAppIconProvider`): `.bundle` → `NSWorkspace.icon(forFile:)`;
 `.runningApp` → `NSRunningApplication.icon`; `.windowsExecutable` → the exe's icon via
 `PEIconExtractor` (path from `WinePath.macPath` with the process's `WINEPREFIX`, else the
-first existing match under `~/Library/Application Support/CrossOver/Bottles/*`,
-`~/.wine`), else CrossOver's app icon, else the generic application icon;
-`.executable` → `NSWorkspace.icon(forFile:)`; `.symbol` → the SF Symbol on a
-`glyphTile`-style square. Cached by key.
+first existing match in every bottle of CrossOver's `BottleDir` preference (bottles may
+live on another volume), of `~/Library/Application Support/CrossOver/Bottles/*` and of
+`~/.wine`), else CrossOver's app icon, else the generic application icon; `.executable`
+→ `NSWorkspace.icon(forFile:)`, else the generic executable icon; `.symbol` → the SF
+Symbol as a template image, which the panel draws on a `glyphTile` square. Cached by key.
 
 **Volume keys** (`VolumeKeyMonitor`): a `CGEventTap` (session, head, default) for
 `NX_SYSDEFINED` (type 14) events; subtype 8 with key codes `NX_KEYTYPE_SOUND_UP` (0),
@@ -492,6 +516,8 @@ source changes (Soprano Cast's `CarbonHotkeys`, reduced to one combo).
     func permissionDidChange()
     /// Writes every pending change now (quit).
     func flushPendingSettings()
+    /// One meter frame now (the snapshot harness; the panel's 30 Hz timer otherwise).
+    func tickMeters()
 }
 enum MixerModelBuilder {
     static func model(listedApps: [AudioApp], settings: SopranoMixSettings, devices: DeviceSnapshot,
@@ -516,9 +542,13 @@ Controller behavior:
   (mouse up, menu choice, key up, CLI) or 0.5 s after the last change. A failed write
   (settings.json does not parse) stays pending and is retried after the next settings
   change. After every write, overrides the file now satisfies are dropped (a no-op write
-  fires no settings change). Apps with a pending volume override are `heldKeys`, outputs
-  with a pending software-volume override `heldOutputUIDs`. `flushPendingSettings()`
-  writes everything pending at once (quit).
+  fires no settings change). `flushPendingSettings()` writes everything pending at once
+  (quit).
+- **Held routes**: a volume change made by a gesture still in progress (a drag before
+  mouse up, a volume key still down) holds its route: the app is in `heldKeys`, the
+  output in `heldOutputUIDs`, independent of when the debounced write lands, so a drag
+  resting at 100 % keeps its tap. A final change, the key's release, or the panel closing
+  (a drag whose mouse up never came) releases the hold.
 - **Intents**: `setAppVolume` → `apps.<key>.volume` (rounded to integer percent);
   `toggleAppMute` → `apps.<key>.muted`; `setAppOutput` → `apps.<key>.output` (UID, or
   "default"); `setDefaultDevice` → `devices.setDefaultDevice`; `setDeviceVolume` →
@@ -532,10 +562,11 @@ Controller behavior:
 - **Meters**: while visible, a 30 Hz timer (`environment.scheduleRepeating`) takes
   `router.takeLevels()`, runs one `MeterBallistics` per key and calls
   `panel.updateLevels`.
-- **Volume keys**: false unless `volumeKeys.anyOutput` and the default output has no
-  hardware volume. Then down events change its software volume
-  (`VolumeLaw.step`, mute toggles), re-plan, persist after 0.5 s, show the HUD when
-  `volumeKeys.hud`; up events of consumed keys are consumed too.
+- **Volume keys**: false unless `volumeKeys.anyOutput`, the default output has no
+  hardware volume and capture allows routes (without System Audio Recording the key goes
+  to macOS; while not determined it asks once). Then down events change its software
+  volume (`VolumeLaw.step`, mute toggles), re-plan, persist after 0.5 s, show the HUD
+  when `volumeKeys.hud`; up events of consumed keys are consumed too and release the hold.
 - **CLI**: `list` → every listed app as `CLIApp`; `devices` → every device; `setVolume`,
   `setMuted` (nil toggles), `setOutput` → `AppMatcher.match` over connected apps (a
   key-like query without a match sets that key); errors "No app matches '<q>'." and
@@ -563,7 +594,9 @@ enum CLIClient { static func run(arguments: [String]) -> Int32 }                
 @MainActor final class VolumeHUD: VolumeHUDPresenting { init() }                   // Panel
 struct PermissionStatus: Equatable { var capture: CaptureStatus; var accessibility: Bool }
 @MainActor final class PermissionsWindowController {                               // Shell
-    init(status: @escaping @MainActor () -> PermissionStatus)
+    /// `theme` nil follows `ThemeCenter.shared`; the harness passes one.
+    init(status: @escaping @MainActor () -> PermissionStatus, theme: AppTheme? = nil)
+    var onStatusChange: (@MainActor (PermissionStatus) -> Void)?
     func show()
     func renderImage() -> CGImage?
 }
@@ -624,7 +657,7 @@ struct PermissionStatus: Equatable { var capture: CaptureStatus; var accessibili
 - `ScanCommand` (`SopranoMix scan [--all]`): no app needed, no tap, no permission:
   prints the connected apps as the resolver groups them (key, name, kind, playing, pids,
   and per process the bundle id, executable path, argv[0], responsible app) plus the
-  devices. `--all` includes apps that never play. The tool for "why is my app not
+  devices. `--all` also lists apps that are connected but not playing now. The tool for "why is my app not
   listed".
 - `SelfTestCommand` (`SopranoMix selftest [--gain <x>] [--seconds <n>] [--silent]`): the
   live pipeline check. Writes a 440 Hz −12 dBFS tone to a temporary WAV, plays it with
@@ -675,8 +708,10 @@ Scenarios (process facts go through the real `AudioAppResolver`):
 fixtures with an immediate scheduler, offscreen, no Dock icon, no persisted state, no
 permission. Actions, applied in order through `controller.handle(_:)` /
 `handleVolumeKey`: `volume:<app>=<pct>`, `mute:<app>`, `output:<app>=<device|default>`,
-`device:<output|input|effects>=<device>`, `devvolume:<output|input>=<pct>`, `keyUp`,
-`keyDown`, `keyMute` (`<app>` through `AppMatcher`, `<device>` by name). `--levels` feeds
+`device:<output|input|effects>=<device>`, `devvolume:<output|input|effects>=<pct>`,
+`keyUp`, `keyDown`, `keyMute` (`<app>` through `AppMatcher`, `<device>` by UID, name,
+unique prefix or unique substring; quote names with spaces: `output:Discord="AirPods"`).
+`--help` prints the usage. `--levels` feeds
 fixed levels (one app near clipping). `--hud` renders the HUD after the actions instead
 of the panel. `--report` writes JSON: listed apps (key, name, volume, muted, output,
 playing), the last plan (routes with key, mode, gain, device, process ids; master), the

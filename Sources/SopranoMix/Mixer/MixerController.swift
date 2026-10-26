@@ -33,9 +33,14 @@ final class MixerController {
     private var tracker = AppListTracker()
     /// Changes the panel, keys or CLI made that settings.json may not hold yet, one per path.
     private var overrides: [SettingOverride] = []
-    /// Paths of overrides not written yet, in the order they first changed. Pending app
-    /// volumes and software output volumes hold their routes (`heldKeys`, `heldOutputUIDs`).
+    /// Paths of overrides not written yet, in the order they first changed.
     private var pendingPaths: [[String]] = []
+    /// Paths changed by a gesture still in progress (a drag before mouse up, a held volume
+    /// key): app volumes and software output volumes here keep their routes (`heldKeys`,
+    /// `heldOutputUIDs`) even after the debounced write, so resting at 100 % mid-drag
+    /// never tears a tap down. Released by a final change, a key release, or the panel
+    /// closing (a drag whose mouse up never arrived).
+    private var gesturePaths: Set<[String]> = []
     /// Paths whose write failed (settings.json unreadable); retried after the next
     /// settings change.
     private var failedPaths: [[String]] = []
@@ -117,6 +122,9 @@ final class MixerController {
         let visible = panel.isVisible
         guard visible != wasVisible else { return }
         wasVisible = visible
+        if !visible {
+            gesturePaths = gesturePaths.filter { $0.first != "apps" }
+        }
         refresh()
     }
 
@@ -242,13 +250,24 @@ final class MixerController {
     /// True consumes the key.
     func handleVolumeKey(_ event: VolumeKeyEvent) -> Bool {
         guard event.isDown else {
-            return consumedKeys.remove(event.key) != nil
+            guard consumedKeys.remove(event.key) != nil else { return false }
+            // The key is up: the software volume change is final, the master may go.
+            gesturePaths = gesturePaths.filter { $0.first != "outputs" }
+            refresh()
+            return true
         }
         let settings = effectiveSettings
         guard settings.volumeKeys.anyOutput,
               let device = devices.snapshot.defaultOutput,
               device.outputVolume == nil
         else {
+            consumedKeys.remove(event.key)
+            return false
+        }
+        // Without System Audio Recording no route can apply a software volume: leave the
+        // key to macOS rather than show a change that never happens (and ask, once).
+        guard environment.captureStatus().allowsRoutes else {
+            requestCaptureIfUndetermined()
             consumedKeys.remove(event.key)
             return false
         }
@@ -461,6 +480,11 @@ final class MixerController {
             if !pendingPaths.contains(entry.path) {
                 pendingPaths.append(entry.path)
             }
+            if isFinal {
+                gesturePaths.remove(entry.path)
+            } else {
+                gesturePaths.insert(entry.path)
+            }
         }
         if isFinal {
             // Writes, then re-plans once with the routes no longer held.
@@ -500,19 +524,20 @@ final class MixerController {
         refresh()
     }
 
-    /// Apps whose volume change is still in progress keep their route (`heldKeys`).
+    /// Apps whose volume gesture is still in progress keep their route (`heldKeys`). Read
+    /// from the paths, not the overrides: a written override the file holds is dropped,
+    /// the gesture is not over.
     private var heldKeys: Set<AppKey> {
-        var keys: Set<AppKey> = []
-        for case let .appVolume(key, _) in overrides where pendingPaths.contains(["apps", key.rawValue, "volume"]) {
-            keys.insert(key)
-        }
-        return keys
+        Set(gesturePaths.compactMap { path in
+            path.count == 3 && path[0] == "apps" && path[2] == "volume" ? AppKey(rawValue: path[1]) : nil
+        })
     }
 
-    /// Outputs whose software volume change is still in progress keep their master route.
+    /// Outputs whose software volume gesture is still in progress keep their master route.
     private func heldOutputUIDs(in snapshot: DeviceSnapshot) -> Set<String> {
         var uids: Set<String> = []
-        for case let .outputVolume(name, _) in overrides where pendingPaths.contains(["outputs", name, "volume"]) {
+        for path in gesturePaths where path.count == 3 && path[0] == "outputs" && path[2] == "volume" {
+            let name = path[1]
             for device in snapshot.outputs
             where device.uid == name || device.name.caseInsensitiveCompare(name) == .orderedSame {
                 uids.insert(device.uid)

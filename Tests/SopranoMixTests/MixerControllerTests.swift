@@ -139,6 +139,42 @@ struct MixerControllerTests {
         #expect(harness.controller.plan.master == nil)
     }
 
+    @Test("a drag resting at 100 % keeps its route after the debounced write, until mouse up")
+    func dragPausedAtDefaultKeepsRoute() {
+        let harness = MixerTestHarness()
+        harness.controller.handle(.setAppVolume(spotify, 100, final: false))
+        harness.environment.scheduler.fireAll()
+        harness.controller.settingsDidChange()
+        #expect(harness.writes == [volumeWrite(spotify, 100)])
+        #expect(harness.controller.plan.route(for: spotify)?.mode == .replace)
+
+        harness.controller.handle(.setAppVolume(spotify, 100, final: true))
+        #expect(harness.controller.plan.route(for: spotify) == nil)
+    }
+
+    @Test("closing the panel releases a drag that never reported its mouse up")
+    func hidingPanelReleasesHold() {
+        let harness = MixerTestHarness()
+        harness.controller.showPanel(anchor: nil)
+        harness.controller.handle(.setAppVolume(spotify, 100, final: false))
+        harness.environment.scheduler.fireAll()
+        #expect(harness.controller.plan.route(for: spotify)?.mode == .replace)
+        harness.controller.hidePanel()
+        #expect(harness.controller.plan.route(for: spotify) == nil)
+    }
+
+    @Test("holding a volume key at 100 % keeps the master route until the key is released")
+    func volumeKeyHoldsMasterUntilRelease() {
+        var settings = FixtureScenario.game.settings
+        settings.outputs["Odyssey G91F"] = OutputVolumeSettings(volume: 93.75)
+        let harness = MixerTestHarness(scenario: .game, settings: settings)
+        #expect(harness.controller.handleVolumeKey(VolumeKeyEvent(key: .up, isDown: true)))
+        harness.environment.scheduler.fireAll()
+        #expect(harness.controller.plan.master?.gain == 1)
+        #expect(harness.controller.handleVolumeKey(VolumeKeyEvent(key: .up, isDown: false)))
+        #expect(harness.controller.plan.master == nil)
+    }
+
     @Test("a write settings.json refuses stays in force and is retried after the next settings change")
     func failedWriteRetried() {
         let harness = MixerTestHarness()
@@ -313,6 +349,20 @@ struct MixerControllerTests {
         harness.controller.handle(.setAppVolume(spotify, 50, final: true))
         #expect(harness.environment.captureRequests == 0)
         #expect(harness.controller.plan == .empty)
+    }
+
+    @Test("without capture the volume keys pass through to macOS and show no HUD")
+    func volumeKeysWithoutCapture() {
+        let denied = MixerTestHarness(scenario: .game, capture: .denied)
+        let up = denied.press(.up)
+        #expect(!up.down && !up.up)
+        #expect(denied.hud.shown.isEmpty)
+        #expect(denied.writes.isEmpty)
+
+        let undecided = MixerTestHarness(scenario: .game, capture: .notDetermined)
+        #expect(!undecided.press(.up).down)
+        #expect(undecided.environment.captureRequests == 1)
+        #expect(undecided.hud.shown.isEmpty)
     }
 
     @Test("the banner's button asks for capture every time")

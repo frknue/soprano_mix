@@ -497,6 +497,25 @@ enum PanelText {
         text.length == 0 ? 0 : ceil(text.size().width) + 4
     }
 
+    /// `text` shortened at its tail with "…" so it draws within `maxWidth` in `font`;
+    /// unchanged when it already fits. For views that cannot truncate themselves (the
+    /// vendored `ChromeChip` lays its label out at full width).
+    static func truncated(_ text: String, font: NSFont, maxWidth: CGFloat) -> String {
+        func width(_ string: String) -> CGFloat {
+            ceil((string as NSString).size(withAttributes: [.font: font]).width)
+        }
+        guard width(text) > maxWidth else { return text }
+        let characters = Array(text)
+        var low = 0
+        var high = characters.count
+        while low < high {
+            let middle = (low + high + 1) / 2
+            let candidate = String(characters[..<middle]).trimmingCharacters(in: .whitespaces) + "…"
+            if width(candidate) <= maxWidth { low = middle } else { high = middle - 1 }
+        }
+        return String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
     static func lineHeight(_ font: NSFont) -> CGFloat {
         ceil(font.ascender - font.descender + font.leading)
     }

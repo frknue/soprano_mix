@@ -179,6 +179,45 @@ struct AudioAppResolverTests {
             == AppIdentity(key: .bundle("net.whatsapp.WhatsApp"), name: "WhatsApp", kind: .app, icon: .bundle(path: "/Applications/WhatsApp.app")))
     }
 
+    @Test("an app extension folds into its app even though macOS reports it as a running app")
+    func appExtensionFoldsIntoApp() {
+        let whatsApp = RunningAppInfo(pid: nil, bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp",
+                                      bundlePath: "/Applications/WhatsApp.app")
+        let extensionProcess = AudioProcessFacts(
+            objectID: 145, pid: 73314, bundleID: "net.whatsapp.WhatsApp.ServiceExtension",
+            executablePath: "/Applications/WhatsApp.app/Contents/PlugIns/ServiceExtension.appex/Contents/MacOS/ServiceExtension",
+            enclosingApp: whatsApp,
+            ownApp: RunningAppInfo(pid: 73314, bundleID: "net.whatsapp.WhatsApp.ServiceExtension", name: "ServiceExtension",
+                                   bundlePath: "/Applications/WhatsApp.app/Contents/PlugIns/ServiceExtension.appex")
+        )
+        #expect(AudioAppResolver.identity(for: extensionProcess, ownPID: ownPID)?.key == .bundle("net.whatsapp.WhatsApp"))
+        #expect(AudioAppResolver.identity(for: extensionProcess, ownPID: ownPID)?.name == "WhatsApp")
+
+        let simulator = AudioProcessFacts(
+            objectID: 146, pid: 5000, bundleID: "com.apple.iphonesimulator",
+            executablePath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
+            enclosingApp: RunningAppInfo(pid: nil, bundleID: "com.apple.dt.Xcode", name: "Xcode", bundlePath: "/Applications/Xcode.app"),
+            ownApp: RunningAppInfo(pid: 5000, bundleID: "com.apple.iphonesimulator", name: "Simulator",
+                                   bundlePath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app")
+        )
+        #expect(AudioAppResolver.identity(for: simulator, ownPID: ownPID)?.key == .bundle("com.apple.iphonesimulator"))
+    }
+
+    @Test("invisible direction marks in an app's name are dropped, so names sort and match as they read")
+    func directionMarksDropped() {
+        let whatsApp = AudioProcessFacts(
+            objectID: 300, pid: 7001, bundleID: "net.whatsapp.WhatsApp",
+            ownApp: RunningAppInfo(pid: 7001, bundleID: "net.whatsapp.WhatsApp", name: "\u{200E}WhatsApp", bundlePath: nil)
+        )
+        let business = AudioProcessFacts(
+            objectID: 301, pid: 7002, bundleID: "net.whatsapp.WhatsAppSMB",
+            ownApp: RunningAppInfo(pid: 7002, bundleID: "net.whatsapp.WhatsAppSMB", name: "WhatsApp Business", bundlePath: nil)
+        )
+        let apps = AudioAppResolver.apps(from: [business, whatsApp], ownPID: ownPID)
+        #expect(apps.map(\.name) == ["WhatsApp", "WhatsApp Business"])
+        #expect(AppMatcher.match("whatsapp", in: apps) == .match(apps[0]))
+    }
+
     @Test("Soprano Mix's own process is excluded")
     func ownProcessExcluded() {
         let own = AudioProcessFacts(objectID: 200, pid: ownPID, bundleID: "com.soprano.mix",

@@ -28,7 +28,20 @@ public enum AudioAppResolver {
 
     /// One process's identity; nil for Soprano Mix itself (`pid == ownPID`).
     public static func identity(for process: AudioProcessFacts, ownPID: Int32) -> AppIdentity? {
-        resolved(process, ownPID: ownPID)?.identity
+        guard var identity = resolved(process, ownPID: ownPID)?.identity else { return nil }
+        identity.name = cleaned(identity.name)
+        return identity
+    }
+
+    /// Without invisible bidi formatting marks (WhatsApp's bundle name starts with U+200E),
+    /// which would break sorting and name matching while drawing nothing.
+    private static func cleaned(_ name: String) -> String {
+        let marks: Set<Unicode.Scalar> = ["\u{200E}", "\u{200F}", "\u{061C}", "\u{202A}", "\u{202B}", "\u{202C}",
+                                          "\u{202D}", "\u{202E}", "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}"]
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: name.unicodeScalars.filter { !marks.contains($0) })
+        let result = String(scalars).trimmingCharacters(in: .whitespaces)
+        return result.isEmpty ? name : result
     }
 
     /// Every process grouped by identity key, sorted by name
@@ -48,7 +61,7 @@ public enum AudioAppResolver {
             let identity = primary.resolution.identity
             return AudioApp(
                 key: key,
-                name: identity.name,
+                name: cleaned(identity.name),
                 kind: identity.kind,
                 icon: identity.icon,
                 processObjectIDs: Array(Set(members.map { $0.process.objectID })).sorted(),
@@ -138,8 +151,9 @@ public enum AudioAppResolver {
             )
         }
 
-        // 5. The app itself.
-        if let ownApp = process.ownApp {
+        // 5. The app itself; an app extension or XPC service that macOS also reports as a
+        // running app is part of its enclosing app (rule 6), a nested real .app is not.
+        if let ownApp = process.ownApp, !isPlugIn(process, of: ownApp) {
             return Resolution(
                 identity: AppIdentity(
                     key: .bundle(ownApp.bundleID),
@@ -191,6 +205,13 @@ public enum AudioAppResolver {
         if let path = app.bundlePath, !path.isEmpty { return .bundle(path: path) }
         if let pid = app.pid { return .runningApp(pid: pid) }
         return fallback ?? .symbol("app")
+    }
+
+    /// The process lives in an `.appex` or `.xpc` bundle inside another app.
+    private static func isPlugIn(_ process: AudioProcessFacts, of ownApp: RunningAppInfo) -> Bool {
+        guard let enclosing = process.enclosingApp, enclosing.bundleID != ownApp.bundleID else { return false }
+        let path = ownApp.bundlePath ?? process.executablePath ?? ""
+        return path.split(separator: "/").contains { $0.hasSuffix(".appex") || $0.hasSuffix(".xpc") }
     }
 
     /// The last non-empty "/" component of a path; nil for nil or empty.

@@ -121,8 +121,10 @@ Soprano Mix's own volume HUD at the top right (`volumeKeys.hud`). `⌥⇧` with 
 takes quarter steps; the mute key toggles mute. The volume is saved per device under
 `outputs`.
 
-The volume keys need Accessibility. Soprano Mix never asks for it on its own: grant it in
-the permissions window, and the keys start working within two seconds, without a relaunch.
+The volume keys need Accessibility, and System Audio Recording to apply the software
+volume (without it the keys stay with macOS rather than show a change that never
+happens). Soprano Mix never asks for Accessibility on its own: grant it in the
+permissions window, and the keys start working within two seconds, without a relaunch.
 On outputs with hardware volume, the keys stay with macOS.
 
 ## Games under CrossOver
@@ -159,9 +161,9 @@ menu (`⌘,`). The panel and the command line write their changes into it, keepi
 comments and key order. Every key is optional.
 
 A bad value is ignored and keeps its default; it never stops the app. Each problem is
-logged, and the menu and the panel's footer show "settings.json: N warnings" (hover the
-menu line for the messages). A file that is not valid JSON keeps the last good settings
-running.
+logged; the menu shows "settings.json: N warnings" (hover it for the messages) and the
+panel's footer "settings.json · N warnings". A file that is not valid JSON keeps the
+last good settings running.
 
 ```jsonc
 {
@@ -242,6 +244,10 @@ Usage: SopranoMix <command>
                                     Route a test tone through the live pipeline and report JSON
   snapshot --out <png> [options]    Render the panel offscreen on fixtures (development)
   help                              Show this help
+
+<app> is a name (case-insensitive; a unique prefix is enough) or a settings key such as
+com.spotify.client or "wine:TEKKEN 8". Names with spaces work quoted or unquoted
+(set TEKKEN 8 35). Quote device names with spaces: output Discord "AirPods Pro".
 ```
 
 ```bash
@@ -275,7 +281,8 @@ MIX="/Applications/Soprano Mix.app/Contents/MacOS/SopranoMix"
 `SopranoMix scan [--all]` needs neither the running app nor any permission. It prints
 every app connected to Core Audio as Soprano Mix groups it: key, name, kind, playing,
 pids, and per process the bundle id, executable path, `argv[0]` and responsible app.
-Without `--all` it prints the apps that play; `--all` adds the apps that never play. It
+Without `--all` it prints the apps that play now; `--all` adds the apps that are connected
+to Core Audio but silent at the moment. It
 answers "why is my app not listed" and "what is my game's key".
 
 ### selftest
@@ -342,8 +349,8 @@ identity, so both grants survive reinstalling and rebuilding.
 - **An app row shows a red diamond.** Its route failed; hover the name for the reason
   (often the output device disappeared). Pick another output, or quit and reopen Soprano
   Mix to rebuild every route.
-- **Volume keys do nothing on the TV or monitor.** Grant Accessibility in the permissions
-  window, and check `volumeKeys.anyOutput`. Keys pass to macOS on outputs with hardware
+- **Volume keys do nothing on the TV or monitor.** Grant Accessibility and System Audio
+  Recording in the permissions window, and check `volumeKeys.anyOutput`. Keys pass to macOS on outputs with hardware
   volume. While a password field has focus, macOS Secure Input blocks every keyboard tap.
 - **A routed app crackles or stutters.** Raise `audio.bufferFrames` (512 or 1024).
 - **A routed app lags behind the picture.** Lower `audio.bufferFrames`; Bluetooth outputs

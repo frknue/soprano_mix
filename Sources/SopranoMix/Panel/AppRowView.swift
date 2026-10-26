@@ -25,6 +25,9 @@ final class AppRowView: PanelFlippedView {
     static let glyphPointSize: CGFloat = 14
     private static let buttonGap: CGFloat = 4
     private static let markGap: CGFloat = 6
+    /// `ChromeChip`'s label font, and its 6 pt insets plus the label cell's 2 pt sides.
+    private static let chipFont = ChromeFont.sans(size: 11, weight: .medium)
+    private static let chipTextInset: CGFloat = 16
 
     let key: AppKey
     var onIntent: ((PanelIntent) -> Void)?
@@ -200,8 +203,13 @@ final class AppRowView: PanelFlippedView {
             x: muteButton.frame.minX - Self.buttonGap - buttonSide, y: buttonY, width: buttonSide, height: buttonSide
         )
         var nameMaxX = outputButton.frame.minX - Self.buttonGap
-        if !outputChip.isHidden {
+        if !outputChip.isHidden, let outputName = model.outputName {
             let maxChipWidth = max(0, (nameMaxX - Self.contentX) / 2)
+            // ChromeChip lays its label out at full width and never truncates, so the
+            // text is shortened to the room the chip gets; the full name is the tooltip.
+            let shown = PanelText.truncated(outputName, font: Self.chipFont, maxWidth: maxChipWidth - Self.chipTextInset)
+            if outputChip.text != shown { outputChip.text = shown }
+            outputChip.toolTip = shown == outputName ? nil : outputName
             let chipWidth = min(ceil(outputChip.fittingSize.width), maxChipWidth)
             outputChip.frame = NSRect(
                 x: nameMaxX - chipWidth,
