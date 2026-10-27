@@ -428,10 +428,14 @@ processes only) `WINEPREFIX`; `PrivateAPIs.responsiblePID` → `NSRunningApplica
 `responsible` (only when it has a bundle id and differs from the pid);
 `NSRunningApplication(processIdentifier:)` for `ownApp` (bundle id required); the
 outermost `.app` around the executable for `enclosingApp` (its `CFBundleIdentifier`,
-display name, path). Listeners: the process list on the system object, and
-`IsRunningOutput`/`IsRunningInput` on every process object (added and removed as objects
-come and go). Static facts are cached per (object id, pid); running flags re-read on
-change. Changes are coalesced (one `onChange` per main run-loop turn).
+display name, path). Listeners: the process list on the system object, and on every
+process object (added and removed as objects come and go) `IsRunningOutput`,
+`IsRunningInput`, `IsRunning` and `Devices`, each re-reading both running flags. Core
+Audio (measured on macOS 27) never notifies `IsRunningOutput`/`IsRunningInput`; it
+notifies `IsRunning` and `Devices` when a process starts or stops IO. Listening to the
+running flags alone left an app that connects first and plays a moment later "not
+playing", so it was listed only after a relaunch. Static facts are cached per (object
+id, pid). Changes are coalesced (one `onChange` per main run-loop turn).
 
 **Devices** (`LiveAudioDevices`): `kAudioHardwarePropertyDevices` without hidden devices
 (`kAudioDevicePropertyIsHidden`) and without Soprano Mix's own aggregates (UID prefix

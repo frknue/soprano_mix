@@ -109,7 +109,19 @@ final class LiveAudioProcessSource: AudioProcessSource {
         }
     }
 
-    /// One listener pair (`IsRunningOutput`, `IsRunningInput`) per live process object.
+    /// Every selector that may signal a change of a process object's running flags. Core
+    /// Audio (measured on macOS 27) never notifies `IsRunningOutput`/`IsRunningInput`
+    /// themselves; it notifies `IsRunning` and `Devices` when a process starts or stops
+    /// IO. Any of them re-reads both flags, so a process that connects first and plays
+    /// a moment later is seen playing without a restart.
+    private static let runningSelectors: [AudioObjectPropertySelector] = [
+        kAudioProcessPropertyIsRunningOutput,
+        kAudioProcessPropertyIsRunningInput,
+        kAudioProcessPropertyIsRunning,
+        kAudioProcessPropertyDevices,
+    ]
+
+    /// One listener per `runningSelectors` entry per live process object.
     private func updateProcessListeners(for objectIDs: [AudioObjectID]) {
         let live = Set(objectIDs)
         for (objectID, listeners) in processListeners where !live.contains(objectID) {
@@ -118,7 +130,7 @@ final class LiveAudioProcessSource: AudioProcessSource {
         }
         for objectID in objectIDs where processListeners[objectID] == nil {
             var listeners: [CoreAudioListener] = []
-            for selector in [kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyIsRunningInput] {
+            for selector in Self.runningSelectors {
                 let listener = CoreAudioProperties.addListener(
                     objectID, CoreAudioProperties.address(selector), queue: .main
                 ) { [weak self] _, _ in
