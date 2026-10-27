@@ -25,3 +25,7 @@ All notable changes to Soprano Mix are documented here. The format follows
 - `SopranoMix selftest` routes a test tone through a real process tap and reports peaks, latency and pass or fail.
 - Permissions window for System Audio Recording and Accessibility: it opens once on first launch, and grants made in System Settings apply without a relaunch; once access was denied, the panel's "Open Settings" goes straight to the System Settings pane.
 - Only one Soprano Mix runs at a time: a second launch (installed app or dev build) quits at once, so no app is routed twice.
+
+### Fixed
+
+- A routed app (Chrome, Aside …) no longer goes silent for good when its route is rebuilt, e.g. after switching the output device: Core Audio's device-change notifications could deadlock the route builder, leaving the app muted by its old tap with nothing playing it.

@@ -132,6 +132,9 @@ enum AudioRouteEvent: Sendable {
 /// and touches nothing but the preallocated `RouteRenderer` memory, `RouteParameters` and
 /// the route's `RouteGate`.
 final class AudioRoute {
+    /// Where the HAL delivers every route's listener blocks (never the router's queue).
+    private static let listenerQueue = DispatchQueue(label: "com.soprano.mix.route-listeners")
+
     let parameters: RouteParameters
     private(set) var diagnostics: RouteDiagnostics
     /// The tapped (or, for master, excluded) processes right now.
@@ -332,6 +335,10 @@ final class AudioRoute {
             tapFormat: tapFormat,
             onEvent: onEvent
         )
+        // The HAL delivers block listeners with `dispatch_sync` onto their queue. On
+        // `queue` that deadlocks: `queue` makes HAL calls (creating an aggregate) that wait
+        // for in-flight notifications, and those would wait for `queue`. So the listeners
+        // run on their own queue and only hop to `queue`.
         let watched: [(AudioObjectID, AudioObjectPropertyAddress, @Sendable () -> Void)] = [
             (outputDevice, CoreAudioProperties.address(kAudioDevicePropertyDeviceIsAlive), { watch.checkAlive() }),
             (aggregateID, CoreAudioProperties.address(kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput), { watch.checkLayout() }),
@@ -339,7 +346,7 @@ final class AudioRoute {
             (tapID, CoreAudioProperties.address(kAudioTapPropertyFormat), { watch.checkLayout() }),
         ]
         for (object, address, handler) in watched {
-            if let listener = CoreAudioProperties.addListener(object, address, queue: queue, { _, _ in handler() }) {
+            if let listener = CoreAudioProperties.addListener(object, address, queue: Self.listenerQueue, { _, _ in queue.async(execute: handler) }) {
                 listeners.append(listener)
             }
         }

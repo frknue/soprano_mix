@@ -308,7 +308,7 @@ private final class RouteWorker: @unchecked Sendable {
                 parameters: parameters,
                 queue: queue
             ) { [weak self] event in
-                // On `queue`, inside the HAL listener: leave the callback first.
+                // On `queue`, possibly still inside the route's build: let it finish first.
                 guard let self else { return }
                 self.queue.async { [weak self] in
                     self?.handle(event, id: id, build: build)
