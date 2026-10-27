@@ -36,7 +36,7 @@ Phase 1 is built (`swift build`, `swift test`: all green):
   live reload; Soprano theme following; permissions window; app icon (`mix` glyph).
 - **Wine icons**: extracted from the game's .exe (PE resources), found through the
   process's prefix or CrossOver's `BottleDir` preference (bottles may live on another
-  volume, here `/Volumes/Extreme/VMs/Bottles`).
+  volume, as they do on Furkan's Mac).
 
 Verified live on this Mac (macOS 27): `SopranoMix scan` lists TEKKEN 8 (CrossOver,
 playing) as `wine:TEKKEN 8` next to Google Chrome with its helpers folded in; the real
@@ -58,7 +58,6 @@ Recording permission is still undetermined.
 ## Open decisions
 
 - Per-app effects (10-band EQ, Audio Units): later (`docs/ROADMAP.md`).
-- GitHub repo `frknue/soprano_mix`, public like the siblings: not created yet.
 
 ## Decided
 
@@ -66,3 +65,5 @@ Recording permission is still undetermined.
 - Volume law: loudness-proportional percent (gain = (p/100)^(log2(10)/2)).
 - Only apps with a non-default setting are tapped; meters tap read-only, only while the
   panel is open.
+- Public on GitHub as [`frknue/soprano_mix`](https://github.com/frknue/soprano_mix),
+  like the siblings.

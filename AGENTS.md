@@ -5,6 +5,7 @@ volume, mute, boost and output device; system output, input and sound-effects de
 in Soprano's Folio chrome (Paper light, Ink dark). Swift 6 + programmatic AppKit (no
 storyboards/xibs/SwiftUI), SPM, macOS 14.2+, menu-bar app (no Dock icon), hand-packaged
 `.app` via `scripts/install.sh`. Built on Core Audio process taps, no audio driver.
+GitHub: [`frknue/soprano_mix`](https://github.com/frknue/soprano_mix) (public).
 
 **State: phase 1 built, not yet run against real audio** (no tap created on this Mac).
 Goal, scope and next steps: `docs/STATUS.md`. Left out: `docs/ROADMAP.md`. Keep both
