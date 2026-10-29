@@ -759,7 +759,8 @@ window's appearance comes from its theme.
   (`shadowE2`; the offscreen render draws it). Opens 4 pt below the status item,
   right-aligned to it, clamped to the screen's visible frame; height fits the content up
   to 80 % of the visible height, the app list scrolls beyond. Closes on Escape, a click
-  outside, or the status item.
+  outside, or the status item (the click-outside monitor skips clicks inside the status
+  item's frame, which on macOS 27 reach it as clicks in another app).
 - **Layout** (padding 12 top and bottom, 16 sides): the three device sections, a 1 pt
   `borderSubtle` rule with 12 pt above and below, the apps header, the app rows, the
   footer.

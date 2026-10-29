@@ -77,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showPermissions()
             }
         )
+        panel.isShellClick = { [weak self] point in
+            self?.menuBar?.buttonScreenFrame?.contains(point) == true
+        }
         applyVolumeKeys()
         applyHotkey()
         applyLoginItem()

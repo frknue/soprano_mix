@@ -29,6 +29,7 @@ All notable changes to Soprano Mix are documented here. The format follows
 ### Fixed
 
 - A routed app (Chrome, Aside …) no longer goes silent for good when its route is rebuilt, e.g. after switching the output device: Core Audio's device-change notifications could deadlock the route builder, leaving the app muted by its old tap with nothing playing it.
+- Clicking the menu bar icon while the panel is open closes it again instead of closing and reopening it: on macOS 27 the menu bar belongs to the Window Server, so the click on the icon also counted as a click in another app.
 - The macOS volume HUD no longer gets stuck on screen with the volume pinned at the end of its range after pressing a volume key: Soprano Mix's volume-key tap ran on the main thread, and while that thread was busy macOS dropped the key's release and repeated the key until the next press. The tap now decides each key on its own thread, and every press reaches macOS whole or not at all.
 - settings.json is never replaced by the template when it exists but cannot be read (not UTF-8, no permission): the change stays pending instead of wiping every app and output setting.
 - A route that fails to build (a device still reconfiguring) is retried on its own after 2 s, backing off to 60 s, instead of leaving the app at full volume until some other setting changes; a failed read of the output's alive state no longer tears a working route down.

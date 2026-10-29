@@ -5,8 +5,8 @@ import SopranoMixCore
 /// status item and right-aligned to it, as tall as its content up to 80 % of the visible
 /// height (the app list scrolls beyond). It becomes key so sliders take arrow keys;
 /// Escape and clicks in other apps dismiss it (clicks on the status item are the
-/// shell's). Off screen (snapshot harness, tests) it lays out and renders but never
-/// orders in.
+/// shell's, `isShellClick`). Off screen (snapshot harness, tests) it lays out and renders
+/// but never orders in.
 @MainActor
 final class MixPanelWindow: MixPanelPresenting {
     /// Keeps the panel off screen while still laying it out. A process whose activation
@@ -17,6 +17,9 @@ final class MixPanelWindow: MixPanelPresenting {
     private(set) var isVisible = false
     var onIntent: ((PanelIntent) -> Void)?
     var onVisibilityChange: ((Bool) -> Void)?
+    /// Whether a click at a screen point belongs to the shell (the status item). Such a
+    /// click does not dismiss the panel: the status item's own action toggles it.
+    var isShellClick: ((NSPoint) -> Bool)?
 
     let content = MixPanelContentView()
     let panel: MixPanel
@@ -134,8 +137,10 @@ final class MixPanelWindow: MixPanelPresenting {
         dismiss()
     }
 
-    /// Clicks in other apps close the panel. Clicks in our own windows (the status item)
-    /// never reach a global monitor; the shell handles those.
+    /// Clicks in other apps close the panel. On macOS 27 the Window Server owns the menu
+    /// bar windows, status items included, so a click on our own status item reaches this
+    /// monitor too; dismissing on it would let the status item's mouse-up reopen the
+    /// panel. Such clicks are left to the shell.
     private func installClickMonitor() {
         guard clickMonitor == nil else { return }
         clickMonitor = NSEvent.addGlobalMonitorForEvents(
@@ -143,7 +148,8 @@ final class MixPanelWindow: MixPanelPresenting {
         ) { [weak self] _ in
             // Global monitors run on the main thread.
             MainActor.assumeIsolated {
-                self?.dismissByUser()
+                guard let self, self.isShellClick?(NSEvent.mouseLocation) != true else { return }
+                self.dismissByUser()
             }
         }
     }
