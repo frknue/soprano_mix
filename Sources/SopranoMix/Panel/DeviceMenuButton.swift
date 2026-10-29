@@ -70,6 +70,7 @@ final class DeviceMenuButton: PanelFlippedView {
         case .compact:
             if let iconButton {
                 iconButton.translatesAutoresizingMaskIntoConstraints = true
+                iconButton.frame.size = NSSize(width: Self.compactSide, height: Self.compactSide)
                 iconButton.target = self
                 iconButton.action = #selector(openMenu(_:))
                 addSubview(iconButton)

@@ -76,11 +76,18 @@ final class SettingsCenter {
     }
 
     /// Sets one value in settings.json, keeping its comments and key order, and applies it.
-    /// False (logged) when the file could not be edited, e.g. while it does not parse.
+    /// A missing file is created from the template; any other read failure (not UTF-8,
+    /// no permission) or a file that does not parse returns false (logged) and leaves the
+    /// file as it is.
     @discardableResult
     func write(_ value: Any, at path: [String]) -> Bool {
         do {
-            let text = (try? SettingsFile.read(at: fileURL)) ?? SettingsTemplate.text
+            let text: String
+            do {
+                text = try SettingsFile.read(at: fileURL)
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                text = SettingsTemplate.text
+            }
             let edited = try SettingsEditor.setting(value, at: path, in: text)
             try SettingsFile.write(edited, to: fileURL)
         } catch {

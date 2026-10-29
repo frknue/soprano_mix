@@ -483,9 +483,16 @@ private final class RouteWatch: @unchecked Sendable {
         self.onEvent = onEvent
     }
 
+    /// Fires `.deviceGone` when the output reports not alive or no longer exists
+    /// (`kAudioHardwareBadObjectError`). Any other failed read proves nothing: treating it
+    /// as gone would destroy a working route.
     func checkAlive() {
-        let alive = try? CoreAudioProperties.value(outputDevice, CoreAudioProperties.address(kAudioDevicePropertyDeviceIsAlive), as: UInt32.self)
-        if (alive ?? 0) == 0 { fire(.deviceGone) }
+        do {
+            let alive = try CoreAudioProperties.value(outputDevice, CoreAudioProperties.address(kAudioDevicePropertyDeviceIsAlive), as: UInt32.self)
+            if alive == 0 { fire(.deviceGone) }
+        } catch let error as CoreAudioError where error.status == OSStatus(kAudioHardwareBadObjectError) {
+            fire(.deviceGone)
+        } catch {}
     }
 
     /// Fires `.layoutChanged` when the stream channel counts or the tap format differ

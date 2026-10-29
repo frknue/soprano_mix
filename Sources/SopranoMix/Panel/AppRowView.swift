@@ -61,6 +61,11 @@ final class AppRowView: PanelFlippedView {
         for view in [background, statusMark, outputChip, muteButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = true
         }
+        // Frame-laid chrome keeps a size its own required constraints accept even while
+        // hidden (layout only positions it when visible); a zero frame would conflict with
+        // the chip's 18 pt height and the button's 24 pt side.
+        outputChip.frame.size = NSSize(width: Self.chipTextInset, height: Chrome.chipHeight)
+        muteButton.frame.size = NSSize(width: Chrome.iconButtonSize, height: Chrome.iconButtonSize)
         iconTile.layer?.cornerRadius = Self.glyphTileRadius
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setAccessibilityElement(false)

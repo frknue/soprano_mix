@@ -9,8 +9,8 @@ import SopranoMixCore
 /// it needs no permission.
 ///
 /// Static facts are read once per (object id, pid); the running flags are re-read when
-/// their listeners fire. Listeners run on the main queue; changes are coalesced into one
-/// `onChange` per main run-loop turn.
+/// their listeners fire. Listeners hop to the main actor (`addMainListener`); changes are
+/// coalesced into one `onChange` per main run-loop turn.
 @MainActor
 final class LiveAudioProcessSource: AudioProcessSource {
     private(set) var processes: [AudioProcessFacts] = []
@@ -35,14 +35,11 @@ final class LiveAudioProcessSource: AudioProcessSource {
     func start() {
         guard !isStarted else { return }
         isStarted = true
-        listListener = CoreAudioProperties.addListener(
+        listListener = CoreAudioProperties.addMainListener(
             Self.systemObject,
-            CoreAudioProperties.address(kAudioHardwarePropertyProcessObjectList),
-            queue: .main
-        ) { [weak self] _, _ in
-            MainActor.assumeIsolated {
-                self?.reload(notify: true)
-            }
+            CoreAudioProperties.address(kAudioHardwarePropertyProcessObjectList)
+        ) { [weak self] in
+            self?.reload(notify: true)
         }
         reload(notify: false)
     }
@@ -131,12 +128,10 @@ final class LiveAudioProcessSource: AudioProcessSource {
         for objectID in objectIDs where processListeners[objectID] == nil {
             var listeners: [CoreAudioListener] = []
             for selector in Self.runningSelectors {
-                let listener = CoreAudioProperties.addListener(
-                    objectID, CoreAudioProperties.address(selector), queue: .main
-                ) { [weak self] _, _ in
-                    MainActor.assumeIsolated {
-                        self?.runningChanged(objectID)
-                    }
+                let listener = CoreAudioProperties.addMainListener(
+                    objectID, CoreAudioProperties.address(selector)
+                ) { [weak self] in
+                    self?.runningChanged(objectID)
                 }
                 if let listener { listeners.append(listener) }
             }

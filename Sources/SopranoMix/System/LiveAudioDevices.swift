@@ -11,9 +11,10 @@ import os
 /// mixer.
 ///
 /// Listeners on the device list and the three defaults (system object) and on every
-/// visible device's volume, mute, balance, sample rate, streams and name; they are
-/// re-installed whenever the device list changes. Listeners run on the main queue;
-/// changes are coalesced into one `onChange` per main run-loop turn.
+/// visible device's volume, mute, balance, sample rate, streams and name; devices that
+/// appear get theirs, devices that go lose theirs. Listeners hop to the main actor
+/// (`addMainListener`); their notifications and setter writes are coalesced into one
+/// refresh per main run-loop turn, and changes into one `onChange`.
 @MainActor
 final class LiveAudioDevices: AudioDeviceControlling {
     private(set) var snapshot = DeviceSnapshot()
@@ -29,6 +30,8 @@ final class LiveAudioDevices: AudioDeviceControlling {
     private var systemListeners: [CoreAudioListener] = []
     private var deviceListeners: [AudioObjectID: [CoreAudioListener]] = [:]
     private var changePending = false
+    private var refreshPending = false
+    private var reinstallPending = false
 
     init() {}
 
@@ -42,22 +45,18 @@ final class LiveAudioDevices: AudioDeviceControlling {
             kAudioHardwarePropertyDefaultSystemOutputDevice,
         ]
         for selector in deviceList {
-            let listener = CoreAudioProperties.addListener(
-                Self.systemObject, CoreAudioProperties.address(selector), queue: .main
-            ) { [weak self] _, _ in
-                MainActor.assumeIsolated {
-                    self?.refresh(notify: true, reinstallListeners: true)
-                }
+            let listener = CoreAudioProperties.addMainListener(
+                Self.systemObject, CoreAudioProperties.address(selector)
+            ) { [weak self] in
+                self?.scheduleRefresh(reinstallListeners: true)
             }
             if let listener { systemListeners.append(listener) }
         }
         for selector in defaults {
-            let listener = CoreAudioProperties.addListener(
-                Self.systemObject, CoreAudioProperties.address(selector), queue: .main
-            ) { [weak self] _, _ in
-                MainActor.assumeIsolated {
-                    self?.refresh(notify: true, reinstallListeners: false)
-                }
+            let listener = CoreAudioProperties.addMainListener(
+                Self.systemObject, CoreAudioProperties.address(selector)
+            ) { [weak self] in
+                self?.scheduleRefresh(reinstallListeners: false)
             }
             if let listener { systemListeners.append(listener) }
         }
@@ -120,7 +119,8 @@ final class LiveAudioDevices: AudioDeviceControlling {
         } catch {
             logger.error("\(operation, privacy: .public) failed: \(String(describing: error), privacy: .public)")
         }
-        refresh(notify: true, reinstallListeners: false)
+        // The property's own listener usually fires too; both land in one refresh.
+        scheduleRefresh(reinstallListeners: false)
     }
 
     // MARK: - Reading
@@ -137,7 +137,7 @@ final class LiveAudioDevices: AudioDeviceControlling {
             }
         }
         if reinstallListeners {
-            installDeviceListeners(for: devices.map { AudioObjectID($0.objectID) })
+            updateDeviceListeners(for: devices.map { AudioObjectID($0.objectID) })
         }
         let next = DeviceSnapshot(
             devices: devices,
@@ -148,6 +148,23 @@ final class LiveAudioDevices: AudioDeviceControlling {
         guard next != snapshot else { return }
         snapshot = next
         if notify { scheduleChange() }
+    }
+
+    /// One refresh per main run-loop turn, however many notifications arrive (a volume
+    /// change notifies volume, scalar and mute at once).
+    private func scheduleRefresh(reinstallListeners: Bool) {
+        reinstallPending = reinstallPending || reinstallListeners
+        guard !refreshPending else { return }
+        refreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.refreshPending = false
+                let reinstall = self.reinstallPending
+                self.reinstallPending = false
+                self.refresh(notify: true, reinstallListeners: reinstall)
+            }
+        }
     }
 
     private func scheduleChange() {
@@ -162,13 +179,16 @@ final class LiveAudioDevices: AudioDeviceControlling {
         }
     }
 
-    /// Replaces every per-device listener: volume, mute (both scopes), balance, nominal
-    /// sample rate, stream configuration (both scopes) and name.
-    private func installDeviceListeners(for deviceIDs: [AudioObjectID]) {
-        for listeners in deviceListeners.values {
+    /// Per-device listeners: volume, mute (both scopes), balance, nominal sample rate,
+    /// stream configuration (both scopes) and name. Devices already listened to keep
+    /// theirs, so the device-list churn of Soprano Mix's own aggregates (filtered out of
+    /// `deviceIDs`) re-installs nothing.
+    private func updateDeviceListeners(for deviceIDs: [AudioObjectID]) {
+        let visible = Set(deviceIDs)
+        for (device, listeners) in deviceListeners where !visible.contains(device) {
             listeners.forEach { $0.remove() }
+            deviceListeners[device] = nil
         }
-        deviceListeners.removeAll()
         let output = kAudioObjectPropertyScopeOutput
         let input = kAudioObjectPropertyScopeInput
         let global = kAudioObjectPropertyScopeGlobal
@@ -186,13 +206,11 @@ final class LiveAudioDevices: AudioDeviceControlling {
             CoreAudioProperties.address(kAudioDevicePropertyStreamConfiguration, input),
             CoreAudioProperties.address(kAudioObjectPropertyName, global),
         ]
-        for device in deviceIDs {
+        for device in deviceIDs where deviceListeners[device] == nil {
             var listeners: [CoreAudioListener] = []
             for address in addresses where CoreAudioProperties.has(device, address) {
-                let listener = CoreAudioProperties.addListener(device, address, queue: .main) { [weak self] _, _ in
-                    MainActor.assumeIsolated {
-                        self?.refresh(notify: true, reinstallListeners: false)
-                    }
+                let listener = CoreAudioProperties.addMainListener(device, address) { [weak self] in
+                    self?.scheduleRefresh(reinstallListeners: false)
                 }
                 if let listener { listeners.append(listener) }
             }

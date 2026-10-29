@@ -437,6 +437,12 @@ running flags alone left an app that connects first and plays a moment later "no
 playing", so it was listed only after a relaunch. Static facts are cached per (object
 id, pid). Changes are coalesced (one `onChange` per main run-loop turn).
 
+**HAL listeners for the main actor** (`CoreAudioProperties.addMainListener`): the HAL
+delivers listener blocks with `dispatch_sync` onto their queue, and creating or
+destroying an aggregate waits for notifications in flight. So no listener uses the main
+queue (the main thread blocks in `LiveAudioRouter.stopAll` at quit): blocks run on a
+private queue and hop to main with `async`. Same pattern as the routes' own listeners.
+
 **Devices** (`LiveAudioDevices`): `kAudioHardwarePropertyDevices` without hidden devices
 (`kAudioDevicePropertyIsHidden`) and without Soprano Mix's own aggregates (UID prefix
 `com.soprano.mix.`); per device the UID, name, transport, stream channel counts per
@@ -444,8 +450,11 @@ scope, `kAudioHardwareServiceDeviceProperty_VirtualMainVolume` (settable → har
 volume), `kAudioDevicePropertyMute`, `…VirtualMainBalance`, nominal and available sample
 rates. Defaults from `kAudioHardwarePropertyDefaultOutputDevice`, `…DefaultInputDevice`,
 `…DefaultSystemOutputDevice`. Listeners on the device list, the three defaults and each
-device's volume, mute, balance, sample rate and streams; coalesced `onChange`. Setters
-write the same properties; failures are logged, never fatal.
+device's volume, mute, balance, sample rate and streams; a device-list change adds
+listeners only for new visible devices and removes them for gone ones (Soprano Mix's own
+aggregates change the list on every route build). Notifications and setter writes are
+coalesced into one refresh per main run-loop turn, and changes into one `onChange`.
+Setters write the same properties; failures are logged, never fatal.
 
 **Router** (`LiveAudioRouter`): `apply(_ plan:)` diffs against the live routes by key.
 Same target device, mode and buffer size → update in place: gain and limiter through
@@ -455,8 +464,10 @@ route ramps to gain 0, the new one is built and started, then the old one is tor
 so the app is never heard unprocessed in between. Routes no longer planned are stopped
 and destroyed (IOProc stop, destroy IOProc, destroy aggregate, destroy tap, in that
 order). A failed route whose configuration is unchanged only takes new parameters; it is
-rebuilt when its configuration changes or on a plan change at least 2 s after its last
-attempt. Each plan runs as one batch on one serial queue off the main actor, ordered so
+rebuilt when its configuration changes, and otherwise retried on its own (no plan change
+needed) 2 s after the failed attempt, doubling per further failure of the same
+configuration up to 60 s. A route's output counts as gone when it reports not alive or
+no longer exists (`kAudioHardwareBadObjectError`), not on any other failed read. Each plan runs as one batch on one serial queue off the main actor, ordered so
 no process is ever unprocessed: master changes that only shrink its excluded set,
 removals, app builds and updates, then master changes that grow it. Statuses
 (`starting`, `running`, `failed(reason)`) publish back on the main actor. The
@@ -553,8 +564,9 @@ Controller behavior:
 - **Overrides**: an intent changes an in-memory override at once (re-plan, gain applied
   within one IO cycle), and persists through `environment.writeSetting` when `final`
   (mouse up, menu choice, key up, CLI) or 0.5 s after the last change. A failed write
-  (settings.json does not parse) stays pending and is retried after the next settings
-  change. After every write, overrides the file now satisfies are dropped (a no-op write
+  (settings.json does not parse, or cannot be read) stays pending and is retried after
+  the next settings change; only a missing file is created from the template, an
+  unreadable one is never overwritten. After every write, overrides the file now satisfies are dropped (a no-op write
   fires no settings change). `flushPendingSettings()` writes everything pending at once
   (quit).
 - **Held routes**: a volume change made by a gesture still in progress (a drag before

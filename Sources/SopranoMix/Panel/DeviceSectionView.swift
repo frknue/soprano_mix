@@ -65,9 +65,14 @@ final class DeviceSectionView: PanelFlippedView {
             action: nil
         )
         super.init(frame: .zero)
+        // Frame-laid chrome keeps a size its own required constraints accept even while
+        // hidden (layout only sizes it when visible), so it is measured before switching.
+        let chipSize = NSSize(width: ceil(softwareChip.fittingSize.width), height: Chrome.chipHeight)
         for view in [eyebrow, softwareChip, muteButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = true
         }
+        softwareChip.frame.size = chipSize
+        muteButton.frame.size = NSSize(width: Chrome.iconButtonSize, height: Chrome.iconButtonSize)
         muteButton.target = self
         muteButton.action = #selector(toggleMute(_:))
         readout.alignment = .right

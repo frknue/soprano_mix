@@ -164,6 +164,26 @@ enum CoreAudioProperties {
         return CoreAudioListener(object: object, address: address, queue: queue, block: block)
     }
 
+    /// Where the HAL delivers `addMainListener` blocks (never the main queue itself).
+    private static let mainListenerQueue = DispatchQueue(label: "com.soprano.mix.main-listeners")
+
+    /// A listener whose `handler` runs on the main actor. The HAL delivers blocks with
+    /// `dispatch_sync` onto their queue, and some HAL calls (creating or destroying an
+    /// aggregate) wait for notifications in flight; with the main queue as the listener
+    /// queue, a main thread blocked on such a call (`LiveAudioRouter.stopAll` at quit)
+    /// would deadlock. So the block runs on a private queue and only hops to main.
+    static func addMainListener(
+        _ object: AudioObjectID,
+        _ address: AudioObjectPropertyAddress,
+        _ handler: @escaping @MainActor @Sendable () -> Void
+    ) -> CoreAudioListener? {
+        addListener(object, address, queue: mainListenerQueue) { _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { handler() }
+            }
+        }
+    }
+
     private static func read<T>(
         _ object: AudioObjectID,
         _ address: AudioObjectPropertyAddress,

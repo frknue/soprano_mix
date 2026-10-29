@@ -155,4 +155,19 @@ struct SettingsCenterTests {
         #expect(try SettingsFile.read(at: url) == broken)
         #expect(center.settings.audio(for: .wine("TEKKEN 8")).volume == 100)
     }
+
+    @Test("a write into a file that is not UTF-8 fails and leaves its bytes alone")
+    func writeIntoUnreadableFileFails() throws {
+        let url = temporaryFileURL()
+        defer { removeDirectory(of: url) }
+        let center = SettingsCenter(fileURL: url)
+        center.start(watching: false)
+        // Latin-1 "Küche": not UTF-8.
+        let bytes = Data(#"{ "outputs": { "K"#.utf8) + Data([0xFC]) + Data(#"che": { "volume": 40 } } }"#.utf8)
+        try bytes.write(to: url)
+
+        #expect(!center.write(35, at: ["apps", "wine:TEKKEN 8", "volume"]))
+
+        #expect(try Data(contentsOf: url) == bytes)
+    }
 }

@@ -24,11 +24,19 @@ final class LiveAudioRouter: AudioRouting {
         var diagnostics: RouteDiagnostics?
         /// `now()` of the last build (or worker rebuild) of this route.
         var lastAttempt: TimeInterval
+        /// Failed builds in a row of this configuration; sets the retry delay.
+        var failures = 0
     }
 
-    /// A failed route with an unchanged configuration is retried on a plan change only
-    /// this long after its last build attempt.
+    /// A failed route is rebuilt this long after its first failure, doubling per further
+    /// failure of the same configuration up to `maxRetryInterval`, even when the plan
+    /// stays the same.
     static let retryInterval: TimeInterval = 2
+    static let maxRetryInterval: TimeInterval = 60
+
+    static func retryDelay(afterFailures failures: Int) -> TimeInterval {
+        min(retryInterval * pow(2, Double(max(failures - 1, 0))), maxRetryInterval)
+    }
 
     private var entries: [RouteID: Entry] = [:]
     private var lastPlan: RoutePlan?
@@ -51,7 +59,16 @@ final class LiveAudioRouter: AudioRouting {
     func apply(_ plan: RoutePlan) {
         guard plan != lastPlan else { return }
         lastPlan = plan
+        reconcile(plan)
+    }
 
+    /// Rebuilds failed routes whose retry delay has passed, without a plan change.
+    private func retryFailed() {
+        guard let lastPlan, entries.values.contains(where: \.status.isFailed) else { return }
+        reconcile(lastPlan)
+    }
+
+    private func reconcile(_ plan: RoutePlan) {
         var wanted: [(RouteID, AudioRouteConfiguration, RouteParameters.Values)] = []
         if let master = plan.master {
             wanted.append((
@@ -99,9 +116,10 @@ final class LiveAudioRouter: AudioRouting {
         for (id, configuration, values) in wanted {
             if var entry = entries[id], entry.configuration.isSameRoute(as: configuration),
                !entry.status.isFailed
-               || (entry.configuration == configuration && time - entry.lastAttempt < Self.retryInterval) {
+               || (entry.configuration == configuration
+                   && time - entry.lastAttempt < Self.retryDelay(afterFailures: entry.failures)) {
                 // Same route: new gain and limiter at once. A failed route stays failed
-                // until its configuration changes or the retry interval has passed.
+                // until its configuration changes or its retry delay has passed.
                 entry.parameters.set(gain: values.gain, limiter: values.limiter)
                 if !entry.status.isFailed, entry.configuration.processObjectIDs != configuration.processObjectIDs {
                     let update = { (processes: [AudioObjectID]) -> RouteWorker.Operation in
@@ -132,12 +150,14 @@ final class LiveAudioRouter: AudioRouting {
             } else {
                 nextGeneration += 1
                 let parameters = RouteParameters(gain: values.gain, limiter: values.limiter)
+                let failures = entries[id].flatMap { $0.configuration == configuration ? $0.failures : nil } ?? 0
                 entries[id] = Entry(
                     configuration: configuration,
                     parameters: parameters,
                     generation: nextGeneration,
                     status: .starting,
-                    lastAttempt: time
+                    lastAttempt: time,
+                    failures: failures
                 )
                 let build = RouteWorker.Operation.build(id, generation: nextGeneration, configuration: configuration, parameters: parameters)
                 if id == .master {
@@ -184,9 +204,16 @@ final class LiveAudioRouter: AudioRouting {
         case .running(let diagnostics):
             entry.status = .running
             entry.diagnostics = diagnostics
+            entry.failures = 0
         case .failed(let reason):
             entry.status = .failed(reason)
             entry.diagnostics = nil
+            entry.failures += 1
+            // A little late, so the delay has surely passed when `reconcile` checks it.
+            let delay = max(Self.retryDelay(afterFailures: entry.failures) - (now() - entry.lastAttempt), 0) + 0.05
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated { self?.retryFailed() }
+            }
         }
         entries[id] = entry
         publish()
