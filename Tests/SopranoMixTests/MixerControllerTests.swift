@@ -168,10 +168,10 @@ struct MixerControllerTests {
         var settings = FixtureScenario.game.settings
         settings.outputs["Odyssey G91F"] = OutputVolumeSettings(volume: 93.75)
         let harness = MixerTestHarness(scenario: .game, settings: settings)
-        #expect(harness.controller.handleVolumeKey(VolumeKeyEvent(key: .up, isDown: true)))
+        #expect(harness.key(VolumeKeyEvent(key: .up, isDown: true)))
         harness.environment.scheduler.fireAll()
         #expect(harness.controller.plan.master?.gain == 1)
-        #expect(harness.controller.handleVolumeKey(VolumeKeyEvent(key: .up, isDown: false)))
+        #expect(harness.key(VolumeKeyEvent(key: .up, isDown: false)))
         #expect(harness.controller.plan.master == nil)
     }
 
@@ -474,7 +474,7 @@ struct MixerControllerTests {
         _ = harness.press(.mute)
         #expect(harness.hud.current?.isMuted == true)
         #expect(harness.controller.plan.master?.gain == 0)
-        #expect(harness.controller.handleVolumeKey(VolumeKeyEvent(key: .mute, isDown: true, isRepeat: true)))
+        #expect(harness.key(VolumeKeyEvent(key: .mute, isDown: true, isRepeat: true)))
         #expect(harness.hud.current?.isMuted == true)
 
         _ = harness.press(.down)

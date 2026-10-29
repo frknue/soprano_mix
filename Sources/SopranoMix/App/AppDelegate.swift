@@ -61,9 +61,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.router = router
         self.controller = controller
+        let volumeKeys = VolumeKeyMonitor()
+        self.volumeKeys = volumeKeys
+        controller.onVolumeKeyInterceptChange = { [weak volumeKeys] intercepts in
+            volumeKeys?.setIntercepts(intercepts)
+        }
         controller.start()
 
-        volumeKeys = VolumeKeyMonitor()
         hotkey = CarbonPanelHotkey()
         menuBar = MenuBarController(
             togglePanel: { [weak self] anchor in
@@ -225,8 +229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else if !volumeKeys.isRunning, Permissions.isAccessibilityTrusted {
             do {
-                try volumeKeys.start { [weak controller] event in
-                    controller?.handleVolumeKey(event) ?? false
+                try volumeKeys.start { [weak controller] event, consumed in
+                    controller?.handleVolumeKey(event, consumed: consumed)
                 }
             } catch {
                 appLog.error("Could not start the volume-key tap: \(String(describing: error), privacy: .public)")

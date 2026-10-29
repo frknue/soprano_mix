@@ -38,32 +38,43 @@ enum VolumeKeyConversion {
     }
 }
 
-/// A system-wide `CGEventTap` (session, head, default) for `NX_SYSDEFINED` events. Its
-/// run-loop source lives on the main run loop, so the callback runs on the main thread
-/// and calls `handler` synchronously; true consumes the event, false passes it on.
+/// A system-wide `CGEventTap` (session, head, default) for `NX_SYSDEFINED` events, on its
+/// own thread and run loop. The callback decides each volume key there through a
+/// `VolumeKeyGate` and never waits for the main thread: macOS gives an active tap about a
+/// second, then disables it and drops what it held, and a lost key-up makes macOS repeat
+/// the key (and keep its volume HUD up) until the next press. Every volume key then
+/// reaches `handler` on the main queue with the decision.
 ///
-/// While running, the tap's refcon holds a retained reference to the monitor; `stop()`
-/// releases it, so the monitor stays alive for as long as its tap can call back.
+/// The tap thread owns a retained reference to the shared state and releases it after its
+/// run loop ends, so no callback outlives it.
 @MainActor
 final class VolumeKeyMonitor: VolumeKeyTapping {
-    private var tap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var refcon: UnsafeMutableRawPointer?
-    private var handler: (@MainActor (VolumeKeyEvent) -> Bool)?
+    private struct RunningTap {
+        let tap: CFMachPort
+        let source: CFRunLoopSource
+        let runLoop: CFRunLoop
+    }
+
+    private let state = VolumeKeyTapState()
+    private var running: RunningTap?
 
     init() {}
 
-    var isRunning: Bool { tap != nil }
+    var isRunning: Bool { running != nil }
 
-    /// Starts the tap. Calling it while running only replaces the handler.
-    func start(handler: @escaping @MainActor (VolumeKeyEvent) -> Bool) throws {
-        if isRunning {
-            self.handler = handler
-            return
+    func setIntercepts(_ intercepts: Bool) {
+        state.setIntercepts(intercepts)
+    }
+
+    func start(handler: @escaping @MainActor @Sendable (VolumeKeyEvent, Bool) -> Void) throws {
+        state.setHandler(handler)
+        guard running == nil else { return }
+        guard AXIsProcessTrusted() else {
+            state.setHandler(nil)
+            throw EventTapError.accessibilityDenied
         }
-        guard AXIsProcessTrusted() else { throw EventTapError.accessibilityDenied }
 
-        let refcon = Unmanaged.passRetained(self).toOpaque()
+        let refcon = Unmanaged.passRetained(state).toOpaque()
         let mask = CGEventMask(1) << CGEventMask(VolumeKeyConversion.systemDefinedEventType)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -72,56 +83,111 @@ final class VolumeKeyMonitor: VolumeKeyTapping {
             eventsOfInterest: mask,
             callback: volumeKeyTapCallback,
             userInfo: refcon
-        ) else {
-            Unmanaged<VolumeKeyMonitor>.fromOpaque(refcon).release()
+        ), let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+            Unmanaged<VolumeKeyTapState>.fromOpaque(refcon).release()
+            state.setHandler(nil)
             throw EventTapError.creationFailed
         }
+        state.begin(tap: tap)
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        let thread = VolumeKeyTapThread(source: source, refcon: refcon)
+        let runLoop = thread.start()
         CGEvent.tapEnable(tap: tap, enable: true)
-
-        self.handler = handler
-        self.tap = tap
-        self.runLoopSource = source
-        self.refcon = refcon
+        running = RunningTap(tap: tap, source: source, runLoop: runLoop)
     }
 
     /// Removes the tap; a no-op when it is not running.
     func stop() {
-        guard let tap else { return }
-        CGEvent.tapEnable(tap: tap, enable: false)
-        if let runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-        }
-        CFMachPortInvalidate(tap)
-        self.tap = nil
-        runLoopSource = nil
-        handler = nil
-        if let refcon {
-            self.refcon = nil
-            Unmanaged<VolumeKeyMonitor>.fromOpaque(refcon).release()
-        }
-    }
-
-    /// Returns true to consume the event. macOS disables a tap whose callback was too
-    /// slow or that secure input interrupted; it then sends a `tapDisabledBy…` event, and
-    /// the tap turns itself back on and lets that event through.
-    fileprivate func receive(type: CGEventType, keyEvent: VolumeKeyEvent?) -> Bool {
-        switch type {
-        case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-            return false
-        default:
-            guard let keyEvent, let handler else { return false }
-            return handler(keyEvent)
-        }
+        guard let running else { return }
+        self.running = nil
+        state.end()
+        CGEvent.tapEnable(tap: running.tap, enable: false)
+        CFRunLoopSourceInvalidate(running.source)
+        CFMachPortInvalidate(running.tap)
+        CFRunLoopStop(running.runLoop)
     }
 }
 
-/// The C callback. The run-loop source is on the main run loop, so this runs on the main
-/// thread; only Sendable values (the converted event, the monitor's address) cross into
-/// the main-actor closure.
+/// What the tap thread and the main thread share, behind a lock.
+private final class VolumeKeyTapState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gate = VolumeKeyGate()
+    private var tap: CFMachPort?
+    private var handler: (@MainActor @Sendable (VolumeKeyEvent, Bool) -> Void)?
+
+    func setIntercepts(_ intercepts: Bool) {
+        lock.withLock { gate.intercepts = intercepts }
+    }
+
+    func setHandler(_ handler: (@MainActor @Sendable (VolumeKeyEvent, Bool) -> Void)?) {
+        lock.withLock { self.handler = handler }
+    }
+
+    /// A new tap: no press is known yet.
+    func begin(tap: CFMachPort) {
+        lock.withLock {
+            self.tap = tap
+            gate = VolumeKeyGate(intercepts: gate.intercepts)
+        }
+    }
+
+    func end() {
+        lock.withLock {
+            tap = nil
+            handler = nil
+        }
+    }
+
+    /// On the tap thread. True consumes the event.
+    func decide(_ event: VolumeKeyEvent) -> Bool {
+        let (consumed, handler) = lock.withLock { (gate.consumes(event), self.handler) }
+        if let handler {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { handler(event, consumed) }
+            }
+        }
+        return consumed
+    }
+
+    /// On the tap thread, after macOS disabled the tap (a slow callback or secure input).
+    func reenable() {
+        guard let tap = lock.withLock({ tap }) else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+}
+
+/// The tap's thread: adds the run-loop source to its own run loop and runs it until the
+/// source is invalidated or the loop stopped, then releases the tap's state reference.
+private final class VolumeKeyTapThread: @unchecked Sendable {
+    private let source: CFRunLoopSource
+    private let refcon: UnsafeMutableRawPointer
+    private var runLoop: CFRunLoop?
+    private let started = DispatchSemaphore(value: 0)
+
+    init(source: CFRunLoopSource, refcon: UnsafeMutableRawPointer) {
+        self.source = source
+        self.refcon = refcon
+    }
+
+    /// Starts the thread and returns its run loop once the source is on it.
+    func start() -> CFRunLoop {
+        let thread = Thread { [self] in
+            let current = CFRunLoopGetCurrent()!
+            CFRunLoopAddSource(current, source, .commonModes)
+            runLoop = current
+            started.signal()
+            CFRunLoopRun()
+            Unmanaged<VolumeKeyTapState>.fromOpaque(refcon).release()
+        }
+        thread.name = "com.soprano.mix.volume-keys"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        started.wait()
+        return runLoop!
+    }
+}
+
+/// The C callback, on the tap thread.
 private func volumeKeyTapCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,
@@ -129,18 +195,18 @@ private func volumeKeyTapCallback(
     refcon: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
     guard let refcon else { return Unmanaged.passUnretained(event) }
-    var converted: VolumeKeyEvent?
-    if type.rawValue == VolumeKeyConversion.systemDefinedEventType,
-       let nsEvent = NSEvent(cgEvent: event),
-       nsEvent.subtype.rawValue == VolumeKeyConversion.auxControlButtonsSubtype {
-        converted = VolumeKeyConversion.event(data1: nsEvent.data1, flags: event.flags)
+    let state = Unmanaged<VolumeKeyTapState>.fromOpaque(refcon).takeUnretainedValue()
+    switch type {
+    case .tapDisabledByTimeout, .tapDisabledByUserInput:
+        state.reenable()
+        return Unmanaged.passUnretained(event)
+    default:
+        break
     }
-    let keyEvent = converted
-    let monitorAddress = Int(bitPattern: refcon)
-    let consume = MainActor.assumeIsolated { () -> Bool in
-        guard let pointer = UnsafeRawPointer(bitPattern: monitorAddress) else { return false }
-        let monitor = Unmanaged<VolumeKeyMonitor>.fromOpaque(pointer).takeUnretainedValue()
-        return monitor.receive(type: type, keyEvent: keyEvent)
-    }
-    return consume ? nil : Unmanaged.passUnretained(event)
+    guard type.rawValue == VolumeKeyConversion.systemDefinedEventType,
+          let nsEvent = NSEvent(cgEvent: event),
+          nsEvent.subtype.rawValue == VolumeKeyConversion.auxControlButtonsSubtype,
+          let keyEvent = VolumeKeyConversion.event(data1: nsEvent.data1, flags: event.flags)
+    else { return Unmanaged.passUnretained(event) }
+    return state.decide(keyEvent) ? nil : Unmanaged.passUnretained(event)
 }

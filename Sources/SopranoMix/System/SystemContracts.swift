@@ -69,13 +69,17 @@ enum EventTapError: Error, Equatable {
     case creationFailed
 }
 
-/// The keyboard's volume keys (up, down, mute), system-wide.
+/// The keyboard's volume keys (up, down, mute), system-wide. The tap decides each key on
+/// its own thread through a `VolumeKeyGate` and never waits for the main thread.
 @MainActor
 protocol VolumeKeyTapping: AnyObject {
     var isRunning: Bool { get }
-    /// `handler` returns true to consume the event. Throws `.accessibilityDenied` without
-    /// Accessibility.
-    func start(handler: @escaping @MainActor (VolumeKeyEvent) -> Bool) throws
+    /// Whether new presses are consumed; kept across `stop`/`start`.
+    func setIntercepts(_ intercepts: Bool)
+    /// `handler` gets every volume key on the main queue after the tap decided, with
+    /// whether it was consumed. Calling it while running only replaces the handler.
+    /// Throws `.accessibilityDenied` without Accessibility.
+    func start(handler: @escaping @MainActor @Sendable (VolumeKeyEvent, Bool) -> Void) throws
     func stop()
 }
 

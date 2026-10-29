@@ -551,8 +551,12 @@ enum SnapshotCommand {
         case let .deviceVolume(role, percent):
             controller.handle(.setDeviceVolume(role, percent, final: true))
         case let .key(key):
-            _ = controller.handleVolumeKey(VolumeKeyEvent(key: key, isDown: true))
-            _ = controller.handleVolumeKey(VolumeKeyEvent(key: key, isDown: false))
+            // As the tap decides it on its own thread.
+            var gate = VolumeKeyGate(intercepts: controller.interceptsVolumeKeys)
+            for isDown in [true, false] {
+                let event = VolumeKeyEvent(key: key, isDown: isDown)
+                controller.handleVolumeKey(event, consumed: gate.consumes(event))
+            }
         }
     }
 

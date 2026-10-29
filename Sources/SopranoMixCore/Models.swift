@@ -433,6 +433,29 @@ public struct VolumeKeyEvent: Equatable, Sendable {
     }
 }
 
+/// Which volume keys the tap consumes, one decision per press: a press's first down is
+/// consumed while `intercepts` is on, and its repeats and its up follow that decision
+/// whatever `intercepts` says by then. macOS must see every press it saw go down come up
+/// again, or it repeats the key until the next press.
+public struct VolumeKeyGate: Equatable, Sendable {
+    public var intercepts: Bool
+    /// Keys down now: true when that press is consumed.
+    public private(set) var pressed: [VolumeKey: Bool] = [:]
+
+    public init(intercepts: Bool = false) {
+        self.intercepts = intercepts
+    }
+
+    /// True consumes the event. A repeat of an unknown press (its first down came before
+    /// the tap) is decided like a first down.
+    public mutating func consumes(_ event: VolumeKeyEvent) -> Bool {
+        guard event.isDown else { return pressed.removeValue(forKey: event.key) ?? false }
+        if event.isRepeat, let consumed = pressed[event.key] { return consumed }
+        pressed[event.key] = intercepts
+        return intercepts
+    }
+}
+
 // MARK: - Permission
 
 /// System Audio Recording (`kTCCServiceAudioCapture`).

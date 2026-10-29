@@ -95,7 +95,7 @@ through `dlsym`); without them the status is `unknown` and routes are attempted.
 Written first; the shared interfaces every module codes against. Change them only
 together with every consumer.
 
-- `Sources/SopranoMixCore/Models.swift` — `AppKey`, `RunningAppInfo`, `AudioProcessFacts`, `AppKind`, `IconSource`, `AppIdentity`, `AudioApp`, `DeviceTransport`, `DeviceRole`, `DeviceScope`, `AudioDevice`, `DeviceSnapshot`, `StereoLevel`, `RouteLevels`, `TapMode`, `RouteSpec`, `MasterRouteSpec`, `RoutePlan`, `VolumeKey`, `VolumeKeyEvent`, `CaptureStatus`.
+- `Sources/SopranoMixCore/Models.swift` — `AppKey`, `RunningAppInfo`, `AudioProcessFacts`, `AppKind`, `IconSource`, `AppIdentity`, `AudioApp`, `DeviceTransport`, `DeviceRole`, `DeviceScope`, `AudioDevice`, `DeviceSnapshot`, `StereoLevel`, `RouteLevels`, `TapMode`, `RouteSpec`, `MasterRouteSpec`, `RoutePlan`, `VolumeKey`, `VolumeKeyEvent`, `VolumeKeyGate`, `CaptureStatus`.
 - `Sources/SopranoMixCore/Keys.swift` — `ModifierSet`, `NamedKey` (+ key codes), `KeySpec` (Soprano Tab's, without `KeyEvent`).
 - `Sources/SopranoMixCore/Settings.swift` — every settings type with its default, `ConfigIssue`, `SettingsResolution`.
 - `Sources/SopranoMixCore/CLIProtocol.swift` — `CLIRequest`, `CLIApp`, `CLIDevice`, `CLIResponse`.
@@ -490,8 +490,13 @@ Symbol as a template image, which the panel draws on a `glyphTile` square. Cache
 **Volume keys** (`VolumeKeyMonitor`): a `CGEventTap` (session, head, default) for
 `NX_SYSDEFINED` (type 14) events; subtype 8 with key codes `NX_KEYTYPE_SOUND_UP` (0),
 `…_DOWN` (1), `…_MUTE` (7) → `VolumeKeyEvent` (down/up, repeat, `fine` = option+shift
-held); the handler returning true consumes the event. Re-enables itself after a timeout.
-`start` throws `EventTapError.accessibilityDenied` without Accessibility.
+held). The tap runs on its own thread and run loop and decides there through a
+`VolumeKeyGate`, never waiting for the main thread: macOS disables a tap that stalls
+about a second and drops what it held, and a lost key-up makes macOS repeat the key and
+keep its HUD up until the next press. The gate decides once per press: a first down is
+consumed while `setIntercepts(true)`, its repeats and its up follow that decision. Every
+volume key then reaches the handler on the main queue with `consumed`. Re-enables itself
+after a timeout. `start` throws `EventTapError.accessibilityDenied` without Accessibility.
 
 **Hotkey** (`CarbonPanelHotkey`): one Carbon `RegisterEventHotKey` (no Accessibility needed);
 character keys resolve to key codes on the current layout, re-registered when the input
@@ -513,8 +518,12 @@ source changes (Soprano Cast's `CarbonHotkeys`, reduced to one combo).
     func showPanel(anchor: NSRect?)
     func hidePanel()
     func handle(_ intent: PanelIntent)
-    /// True consumes the key.
-    func handleVolumeKey(_ event: VolumeKeyEvent) -> Bool
+    /// A volume key the tap already decided on; `consumed` keys never reached macOS.
+    func handleVolumeKey(_ event: VolumeKeyEvent, consumed: Bool)
+    /// `volumeKeys.anyOutput`, a default output without hardware volume, capture allowed;
+    /// pushed to the tap through `onVolumeKeyInterceptChange` on every refresh that changes it.
+    private(set) var interceptsVolumeKeys: Bool
+    var onVolumeKeyInterceptChange: ((Bool) -> Void)?
     func handle(_ request: CLIRequest) -> CLIResponse
     func settingsDidChange()
     func permissionDidChange()
@@ -566,11 +575,12 @@ Controller behavior:
 - **Meters**: while visible, a 30 Hz timer (`environment.scheduleRepeating`) takes
   `router.takeLevels()`, runs one `MeterBallistics` per key and calls
   `panel.updateLevels`.
-- **Volume keys**: false unless `volumeKeys.anyOutput`, the default output has no
-  hardware volume and capture allows routes (without System Audio Recording the key goes
-  to macOS; while not determined it asks once). Then down events change its software
-  volume (`VolumeLaw.step`, mute toggles), re-plan, persist after 0.5 s, show the HUD
-  when `volumeKeys.hud`; up events of consumed keys are consumed too and release the hold.
+- **Volume keys**: the tap consumes new presses while `interceptsVolumeKeys`
+  (`volumeKeys.anyOutput`, the default output has no hardware volume and capture allows
+  routes); without System Audio Recording the key goes to macOS, and while not
+  determined a key macOS got asks once. Consumed downs change the software volume
+  (`VolumeLaw.step`, mute toggles) unless the output gained hardware volume since, re-plan,
+  persist after 0.5 s, show the HUD when `volumeKeys.hud`; a consumed up releases the hold.
 - **CLI**: `list` → every listed app as `CLIApp`; `devices` → every device; `setVolume`,
   `setMuted` (nil toggles), `setOutput` → `AppMatcher.match` over connected apps (a
   key-like query without a match sets that key); errors "No app matches '<q>'." and

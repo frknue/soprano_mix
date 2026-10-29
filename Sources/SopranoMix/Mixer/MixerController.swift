@@ -29,6 +29,11 @@ final class MixerController {
     private(set) var listedApps: [AudioApp] = []
     /// The plan last handed to the router.
     private(set) var plan: RoutePlan = .empty
+    /// Whether the volume keys change the default output's software volume now:
+    /// `volumeKeys.anyOutput`, an output without hardware volume, and capture allowed.
+    /// The tap reads it on its own thread (`onVolumeKeyInterceptChange`).
+    private(set) var interceptsVolumeKeys = false
+    var onVolumeKeyInterceptChange: ((Bool) -> Void)?
 
     private var tracker = AppListTracker()
     /// Changes the panel, keys or CLI made that settings.json may not hold yet, one per path.
@@ -51,8 +56,6 @@ final class MixerController {
     private var draggedAlertVolume: Double?
     private var lastAlertWrite: TimeInterval?
     private var didRequestCapture = false
-    /// Volume keys whose down event was consumed, so their up event is consumed too.
-    private var consumedKeys: Set<VolumeKey> = []
 
     private var isRefreshing = false
     private var needsRefresh = false
@@ -247,31 +250,30 @@ final class MixerController {
 
     // MARK: - Volume keys
 
-    /// True consumes the key.
-    func handleVolumeKey(_ event: VolumeKeyEvent) -> Bool {
+    /// A volume key the tap already decided on (`VolumeKeyGate`, on the tap's thread):
+    /// `consumed` keys never reached macOS. A consumed down steps the default output's
+    /// software volume and shows the HUD; a consumed up ends the gesture. A key macOS got
+    /// while the output needs software volume asks for System Audio Recording (once).
+    func handleVolumeKey(_ event: VolumeKeyEvent, consumed: Bool) {
+        let settings = effectiveSettings
+        guard consumed else {
+            if event.isDown, settings.volumeKeys.anyOutput,
+               let device = devices.snapshot.defaultOutput, device.outputVolume == nil {
+                requestCaptureIfUndetermined()
+            }
+            return
+        }
         guard event.isDown else {
-            guard consumedKeys.remove(event.key) != nil else { return false }
             // The key is up: the software volume change is final, the master may go.
             gesturePaths = gesturePaths.filter { $0.first != "outputs" }
             refresh()
-            return true
+            return
         }
-        let settings = effectiveSettings
-        guard settings.volumeKeys.anyOutput,
-              let device = devices.snapshot.defaultOutput,
-              device.outputVolume == nil
-        else {
-            consumedKeys.remove(event.key)
-            return false
-        }
-        // Without System Audio Recording no route can apply a software volume: leave the
-        // key to macOS rather than show a change that never happens (and ask, once).
-        guard environment.captureStatus().allowsRoutes else {
-            requestCaptureIfUndetermined()
-            consumedKeys.remove(event.key)
-            return false
-        }
-        consumedKeys.insert(event.key)
+        // The tap decided on the state it had; the output or the grant may have changed
+        // since. The key is gone either way.
+        guard let device = devices.snapshot.defaultOutput, device.outputVolume == nil,
+              environment.captureStatus().allowsRoutes
+        else { return }
 
         let name = settings.outputKey(for: device)
         let current = settings.outputVolume(for: device)
@@ -289,7 +291,6 @@ final class MixerController {
         if next.volume != current.volume { changes.append(.outputVolume(name, next.volume)) }
         if next.muted != current.muted { changes.append(.outputMuted(name, next.muted)) }
         if !changes.isEmpty {
-            requestCaptureIfUndetermined()
             change(changes, final: false)
         }
         if settings.volumeKeys.hud {
@@ -301,7 +302,6 @@ final class MixerController {
             )
             hud.show(model, theme: environment.theme())
         }
-        return true
     }
 
     // MARK: - CLI
@@ -608,6 +608,13 @@ final class MixerController {
         if next != plan {
             plan = next
             router.apply(next)
+        }
+        let intercepts = settings.volumeKeys.anyOutput
+            && snapshot.defaultOutput.map { $0.outputVolume == nil } == true
+            && capture.allowsRoutes
+        if intercepts != interceptsVolumeKeys {
+            interceptsVolumeKeys = intercepts
+            onVolumeKeyInterceptChange?(intercepts)
         }
         setMetersRunning(metersOn)
         if visible {

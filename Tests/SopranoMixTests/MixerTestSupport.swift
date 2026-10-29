@@ -175,6 +175,8 @@ final class MixerTestHarness {
     let hud: RecordingHUD
     let environment: MixerTestEnvironment
     let controller: MixerController
+    /// The tap's gate, fed by the controller like the live tap.
+    private var keyGate = VolumeKeyGate()
 
     init(scenario: FixtureScenario = .standard, settings: SopranoMixSettings? = nil, capture: CaptureStatus = .granted) {
         let processes = FixtureProcessSource(scenario: scenario)
@@ -200,6 +202,9 @@ final class MixerTestHarness {
         self.hud = hud
         self.environment = environment
         self.controller = controller
+        controller.onVolumeKeyInterceptChange = { [weak self] intercepts in
+            self?.keyGate.intercepts = intercepts
+        }
         controller.start()
     }
 
@@ -215,10 +220,18 @@ final class MixerTestHarness {
         panel.model?.apps.first { $0.key == key }
     }
 
+    /// One volume key as the tap decides it; returns whether it was consumed.
+    @discardableResult
+    func key(_ event: VolumeKeyEvent) -> Bool {
+        let consumed = keyGate.consumes(event)
+        controller.handleVolumeKey(event, consumed: consumed)
+        return consumed
+    }
+
     /// One key press and release; returns whether each half was consumed.
     func press(_ key: VolumeKey, fine: Bool = false) -> (down: Bool, up: Bool) {
-        let down = controller.handleVolumeKey(VolumeKeyEvent(key: key, isDown: true, fine: fine))
-        let up = controller.handleVolumeKey(VolumeKeyEvent(key: key, isDown: false, fine: fine))
+        let down = self.key(VolumeKeyEvent(key: key, isDown: true, fine: fine))
+        let up = self.key(VolumeKeyEvent(key: key, isDown: false, fine: fine))
         return (down, up)
     }
 }
