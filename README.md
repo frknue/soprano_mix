@@ -17,12 +17,15 @@ SoundSource's documented behavior; no SoundSource code is used.
 ## Install
 
 ```bash
-./scripts/install.sh        # release build → /Applications/Soprano Mix.app
+./scripts/install.sh            # release build → /Applications/Soprano Mix.app
+./scripts/install.sh --restart  # same, then quits the running copy and launches the new one
 ```
 
-`SOPRANO_MIX_INSTALL_DIR` installs somewhere else (an absolute directory). The installer
-never restarts a running Soprano Mix; the update applies on the next launch. Launch at
-login is on by default.
+`SOPRANO_MIX_INSTALL_DIR` installs somewhere else (an absolute directory). Without
+`--restart` the installer leaves a running Soprano Mix alone and the update applies on
+its next launch. `--restart` quits the running installed copy (a normal quit, so settings
+are saved and routes stop; a copy that does not quit within 10 s is terminated) and
+launches the new one. Launch at login is on by default.
 
 Only one Soprano Mix runs at a time: two would tap and replay every app twice. A second
 launch, of the installed app or the dev build (`com.soprano.mix.dev`), quits at once

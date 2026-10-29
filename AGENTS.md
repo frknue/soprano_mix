@@ -46,7 +46,7 @@ swift test --filter RoutePlannerTests
 .build/debug/SopranoMix snapshot --out /tmp/hud.png --scenario game --actions "keyDown" --hud
 .build/debug/SopranoMix snapshot --out /tmp/perm.png --onboarding --permissions capture=notDetermined,accessibility=missing
 ./scripts/dev.sh --build-only             # package .build/debug/Soprano Mix Dev.app (com.soprano.mix.dev)
-./scripts/install.sh                      # release build → /Applications/Soprano Mix.app
+./scripts/install.sh [--restart]          # release build → /Applications/Soprano Mix.app; --restart relaunches the running copy
 ```
 
 `ld: warning: building for macOS-14.2 …` link warnings are expected. `selftest` creates
