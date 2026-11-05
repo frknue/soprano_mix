@@ -21,3 +21,17 @@ and why, is listed below, followed by what comes after phase 1.
 - Per-app input (microphone) control.
 - A Soprano Cast command to open the panel or mute an app.
 - Notarized releases and a Homebrew cask, like Soprano's.
+
+## Linux (Omarchy)
+
+Furkan moves to Omarchy (Arch Linux, Hyprland, Wayland) later. Today only macOS builds.
+
+- The audio backend is a rewrite: CoreAudio (`AudioObject*`, devices, process taps) becomes
+  PipeWire, where per-app streams are native (`wpctl`, `pactl` sink inputs). Most of
+  SoundSource's per-app control comes cheaper there.
+- Build the rest of `SopranoMixCore` (about 3,200 lines, Foundation and CoreGraphics) on Linux
+  (Swift through `swiftly`), with its own test target and a Linux CI job.
+- Hotkeys (Carbon): binds in `hyprland.conf` calling a `soprano-mix` command. Login item
+  (`SMAppService`): `exec-once` or a systemd user unit. The menu-bar panel: a Waybar module.
+- The UI (about 13,200 lines of AppKit) is rebuilt on the toolkit chosen once for the family,
+  in Soprano first (every app syncs its chrome from there).
