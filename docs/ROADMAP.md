@@ -24,14 +24,16 @@ and why, is listed below, followed by what comes after phase 1.
 
 ## Linux (Omarchy)
 
-Furkan moves to Omarchy (Arch Linux, Hyprland, Wayland) later. Today only macOS builds.
+Furkan wechselt später auf Omarchy (Arch Linux, Hyprland, Wayland). Heute baut die App nur auf
+macOS.
 
-- The audio backend is a rewrite: CoreAudio (`AudioObject*`, devices, process taps) becomes
-  PipeWire, where per-app streams are native (`wpctl`, `pactl` sink inputs). Most of
-  SoundSource's per-app control comes cheaper there.
-- Build the rest of `SopranoMixCore` (about 3,200 lines, Foundation and CoreGraphics) on Linux
-  (Swift through `swiftly`), with its own test target and a Linux CI job.
-- Hotkeys (Carbon): binds in `hyprland.conf` calling a `soprano-mix` command. Login item
-  (`SMAppService`): `exec-once` or a systemd user unit. The menu-bar panel: a Waybar module.
-- The UI (about 13,200 lines of AppKit) is rebuilt on the toolkit chosen once for the family,
-  in Soprano first (every app syncs its chrome from there).
+- Das Audio-Backend wird neu geschrieben: aus CoreAudio (`AudioObject*`, Geräte, Process Taps)
+  wird PipeWire, wo Streams pro App eingebaut sind (`wpctl`, `pactl`-Sink-Inputs). Der Großteil
+  von SoundSources Steuerung pro App ist dort günstiger.
+- Den Rest von `SopranoMixCore` (etwa 3.200 Zeilen, Foundation und CoreGraphics) auf Linux bauen
+  (Swift über `swiftly`), mit eigenem Testtarget und einem Linux-CI-Job.
+- Hotkeys (Carbon): Bindings in `hyprland.conf`, die einen `soprano-mix`-Befehl aufrufen.
+  Anmeldeobjekt (`SMAppService`): `exec-once` oder eine systemd-User-Unit. Das
+  Menüleisten-Panel: ein Waybar-Modul.
+- Die UI (etwa 13.200 Zeilen AppKit) wird auf dem Toolkit neu gebaut, das einmal für die ganze
+  Familie gewählt wird, zuerst in Soprano (jede App synct ihr Chrome von dort).
